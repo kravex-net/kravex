@@ -147,11 +147,18 @@ impl DocumentTransformer {
                 Self::RallyS3ToEs(rally_s3_to_es::RallyS3ToEs)
             }
 
+            // -- 🪣📡 S3 Rally → Elasticsearch: same as File→ES. Rally JSON stripped + bulk-formatted.
+            // -- "The sequel nobody asked for, but everyone needed." 🎬
+            (SourceConfig::S3Rally(_), SinkConfig::Elasticsearch(_)) => {
+                Self::RallyS3ToEs(rally_s3_to_es::RallyS3ToEs)
+            }
+
             // -- 🚶 Passthrough pairs: same format, no conversion needed.
-            // -- File→File, InMemory→InMemory, ES→File — just move the bytes.
+            // -- File→File, InMemory→InMemory, ES→File, S3Rally→File — just move the bytes.
             (SourceConfig::File(_), SinkConfig::File(_))
             | (SourceConfig::InMemory(_), SinkConfig::InMemory(_))
-            | (SourceConfig::Elasticsearch(_), SinkConfig::File(_)) => {
+            | (SourceConfig::Elasticsearch(_), SinkConfig::File(_))
+            | (SourceConfig::S3Rally(_), SinkConfig::File(_)) => {
                 Self::Passthrough(passthrough::Passthrough)
             }
 
@@ -325,5 +332,57 @@ mod tests {
         assert_eq!(the_action2["index"]["_id"], "88888");
 
         Ok(())
+    }
+
+    /// 🧪 Resolve S3Rally→File to Passthrough — the "download it first, ask questions later" pair.
+    #[test]
+    fn the_one_where_s3_rally_to_file_resolves_to_passthrough() {
+        use crate::backends::s3_rally::S3RallySourceConfig;
+
+        let source = SourceConfig::S3Rally(S3RallySourceConfig {
+            track: crate::backends::s3_rally::RallyTrack::Geonames,
+            bucket: "test-bucket".to_string(),
+            region: "us-east-1".to_string(),
+            key: None,
+            common_config: CommonSourceConfig::default(),
+        });
+        let sink = SinkConfig::File(FileSinkConfig {
+            file_name: "output.json".to_string(),
+            common_config: CommonSinkConfig::default(),
+        });
+
+        let the_transformer = DocumentTransformer::from_configs(&source, &sink);
+        assert!(
+            matches!(the_transformer, DocumentTransformer::Passthrough(_)),
+            "S3Rally → File should resolve to Passthrough — just move the bytes, no drama"
+        );
+    }
+
+    /// 🧪 Resolve S3Rally→ES to RallyS3ToEs — the future pipeline, pre-wired today.
+    #[test]
+    fn the_one_where_s3_rally_to_es_resolves_to_rally_transform() {
+        use crate::backends::s3_rally::S3RallySourceConfig;
+
+        let source = SourceConfig::S3Rally(S3RallySourceConfig {
+            track: crate::backends::s3_rally::RallyTrack::Pmc,
+            bucket: "rally-data".to_string(),
+            region: "eu-west-1".to_string(),
+            key: Some("custom/pmc.json".to_string()),
+            common_config: CommonSourceConfig::default(),
+        });
+        let sink = SinkConfig::Elasticsearch(ElasticsearchSinkConfig {
+            url: "http://localhost:9200".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            index: Some("pmc-data".to_string()),
+            common_config: CommonSinkConfig::default(),
+        });
+
+        let the_transformer = DocumentTransformer::from_configs(&source, &sink);
+        assert!(
+            matches!(the_transformer, DocumentTransformer::RallyS3ToEs(_)),
+            "S3Rally → ES should resolve to RallyS3ToEs — metadata stripping is not optional"
+        );
     }
 }

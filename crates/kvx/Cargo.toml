@@ -16,3 +16,5 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 indicatif = { workspace = true }
 comfy-table = { workspace = true }
+aws-sdk-s3 = { workspace = true }
+aws-config = { workspace = true }

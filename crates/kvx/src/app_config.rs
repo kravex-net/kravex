@@ -10,7 +10,7 @@ use anyhow::Context;
 use serde::Deserialize;
 // -- 🔧 To load the configuration, so I don't have to manually parse
 // -- environment variables or files. Bleh. Like doing taxes but for bytes.
-use crate::backends::{CommonSinkConfig, ElasticsearchSinkConfig, ElasticsearchSourceConfig, FileSinkConfig, FileSourceConfig};
+use crate::backends::{CommonSinkConfig, ElasticsearchSinkConfig, ElasticsearchSourceConfig, FileSinkConfig, FileSourceConfig, S3RallySourceConfig};
 use figment::{
     Figment,
     providers::{Env, Format, Toml},
@@ -81,6 +81,8 @@ pub enum SourceConfig {
     Elasticsearch(ElasticsearchSourceConfig),
     /// 📂 Read from a local file (NDJSON or Rally JSON array)
     File(FileSourceConfig),
+    /// 🪣 Stream Rally benchmark data from an S3 bucket — geonames, pmc, nyc_taxis, etc.
+    S3Rally(S3RallySourceConfig),
     /// 🧪 In-memory test source — 4 hardcoded docs, no I/O, no regrets
     InMemory(()),
 }
@@ -295,5 +297,77 @@ mod tests {
 
         fs::remove_file(config_path)
             .expect("💀 Failed to remove test config. The janitor quit mid-scene.");
+    }
+
+    /// 🧪 S3Rally source config round-trips through TOML deserialization.
+    /// If this breaks, someone changed the enum variant name and didn't update the TOML format.
+    #[test]
+    fn the_one_where_s3_rally_config_materializes_from_toml() {
+        let config_path = write_test_config(
+            r#"
+            [source_config.S3Rally]
+            track = "geonames"
+            bucket = "my-rally-bucket"
+            region = "us-west-2"
+
+            [sink_config.File]
+            file_name = "output.json"
+            "#,
+        );
+
+        let app_config = load_config(Some(config_path.as_path()))
+            .expect("💀 S3Rally config should parse. The TOML was handcrafted with love.");
+
+        match &app_config.source_config {
+            SourceConfig::S3Rally(s3_cfg) => {
+                assert_eq!(
+                    s3_cfg.track,
+                    crate::backends::s3_rally::RallyTrack::Geonames
+                );
+                assert_eq!(s3_cfg.bucket, "my-rally-bucket");
+                assert_eq!(s3_cfg.region, "us-west-2");
+                assert!(s3_cfg.key.is_none(), "Key should default to None when not specified");
+            }
+            honestly_who_knows => panic!(
+                "💀 Expected S3Rally source config, but got {:?}. Plot twist energy. 🎭",
+                honestly_who_knows
+            ),
+        }
+
+        fs::remove_file(config_path)
+            .expect("💀 Failed to remove test config. The cleanup crew was on break.");
+    }
+
+    /// 🧪 S3Rally config with key override deserializes correctly.
+    #[test]
+    fn the_one_where_s3_rally_key_override_survives_toml_parsing() {
+        let config_path = write_test_config(
+            r#"
+            [source_config.S3Rally]
+            track = "pmc"
+            bucket = "custom-bucket"
+            key = "custom/path/data.json"
+
+            [sink_config.File]
+            file_name = "output.json"
+            "#,
+        );
+
+        let app_config = load_config(Some(config_path.as_path()))
+            .expect("💀 S3Rally config with key override should parse. Serde had one job.");
+
+        match &app_config.source_config {
+            SourceConfig::S3Rally(s3_cfg) => {
+                assert_eq!(s3_cfg.key, Some("custom/path/data.json".to_string()));
+                assert_eq!(s3_cfg.region, "us-east-1", "Region should default to us-east-1");
+            }
+            honestly_who_knows => panic!(
+                "💀 Expected S3Rally, got {:?}. The config took a wrong turn at Albuquerque.",
+                honestly_who_knows
+            ),
+        }
+
+        fs::remove_file(config_path)
+            .expect("💀 Failed to remove test config. Even garbage collection has trust issues.");
     }
 }

@@ -10,7 +10,7 @@ Core library for kravex — the data migration engine. Raw pages, Cow-powered ze
 
 - **Workspace member**: `crates/kvx`
 - **Dependents**: `kvx-cli`
-- **Dependencies**: anyhow, async-channel, figment, reqwest, serde, serde_json, tokio, tracing, async-trait, futures, indicatif, comfy-table
+- **Dependencies**: anyhow, async-channel, figment, reqwest, serde, serde_json, tokio, tracing, async-trait, futures, indicatif, comfy-table, aws-sdk-s3, aws-config
 - **Edition**: 2024
 - **Modules**:
   - `app_config` — `AppConfig`, `RuntimeConfig`, `SourceConfig`, `SinkConfig` (Figment-based config loading; owns all top-level config enums)
@@ -20,6 +20,7 @@ Core library for kravex — the data migration engine. Raw pages, Cow-powered ze
   - `backends/elasticsearch/{elasticsearch_source,elasticsearch_sink}` — ES backend impls
   - `backends/file/{file_source,file_sink}` — file backend impls
   - `backends/in_mem/{in_mem_source,in_mem_sink}` — in-memory test backend
+  - `backends/s3_rally/s3_rally_source` — S3 Rally benchmark source (streams track data from S3 via AWS SDK)
   - `composers` — `Composer` trait + `NdjsonComposer`/`JsonArrayComposer` + `ComposerBackend` dispatcher
   - `collectors` — `PayloadCollector` trait + `NdjsonCollector`/`JsonArrayCollector` + `CollectorBackend` dispatcher
   - `transforms` — `Transform` trait + `DocumentTransformer` enum (Cow-based)
@@ -77,6 +78,7 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 │ FileSource       │   │ RallyS3ToEs          │   │ NdjsonComposer      │
 │ InMemorySource   │   │ Passthrough          │   │ JsonArrayComposer   │
 │ ElasticsearchSrc │   │                      │   │                     │
+│ S3RallySource    │   │                      │   │                     │
 └────────┬─────────┘   └────────┬─────────────┘   └────────┬────────────┘
          │                      │                           │
 ┌────────┴─────────┐   ┌────────┴─────────────┐   ┌────────┴────────────┐
@@ -91,7 +93,9 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 | SourceConfig | SinkConfig | Resolves to |
 |---|---|---|
 | File | Elasticsearch | `RallyS3ToEs` — splits page by `\n`, transforms each doc |
+| S3Rally | Elasticsearch | `RallyS3ToEs` — same as File→ES (future pipeline) |
 | File | File | `Passthrough` — returns entire page as `Cow::Borrowed` |
+| S3Rally | File | `Passthrough` — download data as-is to local file |
 | InMemory | InMemory | `Passthrough` |
 | Elasticsearch | File | `Passthrough` |
 | other | other | `panic!` at resolve time |
@@ -143,4 +147,23 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 - v6-v9 backend file splits: separated backend implementations into dedicated files with re-export shims
 - v10 raw pages + composers (current): Source returns `Option<String>` (raw page), Transform returns `Vec<Cow<str>>` (zero-copy), Composer replaces Collector (transform+assemble in one shot), SinkWorker buffers by byte size. 31 tests passing.
 - v11 config migration (complete): `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs`; `supervisors/config.rs` deleted; all callers updated. 31 tests passing.
-- S3 source backend not yet implemented
+- v12 S3 Rally source (current): `S3RallySource` streams Rally benchmark track data from S3. `RallyTrack` enum validates track names. Config: track, bucket, region, optional key override, CommonSourceConfig. Transport: `GetObject` → `ByteStream::into_async_read()` → `BufReader` → `read_line()` (same loop as FileSource). Transform routing: S3Rally→File = Passthrough, S3Rally→ES = RallyS3ToEs. 44 tests passing.
+
+## S3 Rally Source Configuration Example
+```toml
+[source_config.S3Rally]
+track = "geonames"
+bucket = "my-rally-data"
+region = "us-east-1"
+# key = "custom/path/documents.json"  # optional override, defaults to {track}/documents.json
+
+[sink_config.File]
+file_name = "output.json"
+
+[runtime]
+queue_capacity = 8
+sink_parallelism = 1
+```
+
+### Available Rally Tracks
+big5, clickbench, eventdata, geonames, geopoint, geopointshape, geoshape, http_logs, nested, neural_search, noaa, noaa_semantic_search, nyc_taxis, percolator, pmc, so, treccovid_semantic_search, vectorsearch

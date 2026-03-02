@@ -18,6 +18,7 @@ use crate::app_config::AppConfig;
 use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSource};
 use crate::backends::file::{FileSink, FileSource};
 use crate::backends::in_mem::{InMemorySink, InMemorySource};
+use crate::backends::s3_rally::S3RallySource;
 use crate::backends::{SinkBackend, SourceBackend};
 use crate::supervisors::Supervisor;
 use crate::app_config::{RuntimeConfig, SinkConfig, SourceConfig};
@@ -94,6 +95,12 @@ async fn from_source_config(config: &AppConfig) -> Result<SourceBackend> {
         SourceConfig::Elasticsearch(es_cfg) => {
             let src = ElasticsearchSource::new(es_cfg.clone()).await?;
             Ok(SourceBackend::Elasticsearch(src))
+        }
+        // -- 🪣 The S3 Rally arm: cloud data, benchmark vibes, IAM permissions that
+        // -- may or may not exist. The cloud giveth and the cloud taketh away.
+        SourceConfig::S3Rally(s3_cfg) => {
+            let src = S3RallySource::new(s3_cfg.clone()).await?;
+            Ok(SourceBackend::S3Rally(src))
         }
     }
 }

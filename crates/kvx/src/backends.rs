@@ -17,6 +17,7 @@ pub(crate) mod common_config;
 pub(crate) mod elasticsearch;
 pub(crate) mod file;
 pub(crate) mod in_mem;
+pub(crate) mod s3_rally;
 pub(crate) mod sink;
 pub(crate) mod source;
 
@@ -28,5 +29,6 @@ pub(crate) mod source;
 pub(crate) use common_config::{CommonSinkConfig, CommonSourceConfig};
 pub(crate) use elasticsearch::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
 pub(crate) use file::{FileSinkConfig, FileSourceConfig};
+pub(crate) use s3_rally::{S3RallySourceConfig, RallyTrack};
 pub(crate) use sink::{Sink, SinkBackend};
 pub(crate) use source::{Source, SourceBackend};

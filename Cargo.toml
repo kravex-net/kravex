@@ -48,3 +48,11 @@ indicatif = "0.17"
 
 # 🍽️ a table so comfy it should come with a throw pillow and a cat
 comfy-table = "7"
+
+# 🪣 aws-sdk-s3 — because downloading from S3 by hand is like fetching water from a well
+# when there's a perfectly good pipe RIGHT THERE
+aws-sdk-s3 = "1"
+
+# 🔧 aws-config — the magic incantation that finds your credentials
+# in env vars, IAM roles, ~/.aws/config, or possibly your dreams
+aws-config = { version = "1", features = ["behavior-version-latest"] }
