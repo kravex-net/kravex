@@ -13,24 +13,29 @@ Core library for kravex — the data migration engine. Raw pages, Cow-powered ze
 - **Dependencies**: anyhow, async-channel, figment, reqwest, serde, serde_json, tokio, tracing, async-trait, futures, indicatif, comfy-table, aws-sdk-s3, aws-config
 - **Edition**: 2024
 - **Modules**:
-  - `app_config` — `AppConfig`, `RuntimeConfig`, `SourceConfig`, `SinkConfig` (Figment-based config loading; owns all top-level config enums)
+  - `app_config` — `AppConfig`, `RuntimeConfig`, `SourceConfig`, `SinkConfig`, `ControllerConfig` (Figment-based config loading; owns all top-level config enums)
   - `backends` — backend wiring + re-exports; includes `CommonSinkConfig`, `CommonSourceConfig` (backend-shared config primitives)
   - `backends/common_config` — `CommonSinkConfig`, `CommonSourceConfig` (live here to avoid circular dep with `app_config`)
-  - `backends/{source,sink}` — `Source`/`Sink` traits + `SourceBackend`/`SinkBackend` enums
+  - `backends/{source,sink}` — `Source`/`Sink` traits + `SourceBackend`/`SinkBackend` enums. Source now includes `set_page_size_hint()`.
   - `backends/elasticsearch/{elasticsearch_source,elasticsearch_sink}` — ES backend impls
   - `backends/file/{file_source,file_sink}` — file backend impls
   - `backends/in_mem/{in_mem_source,in_mem_sink}` — in-memory test backend
   - `backends/s3_rally/s3_rally_source` — S3 Rally benchmark source (streams track data from S3 via AWS SDK)
+  - `controllers` — `Controller` trait + `ControllerConfig` + `ControllerBackend` enum (adaptive batch sizing)
+  - `controllers/config_controller` — `ConfigController` (static — returns configured batch size, ignores measurements)
+  - `controllers/pid_bytes_to_doc_count` — `PidBytesToDocCount` (PID feedback loop: measures response bytes, outputs doc count)
   - `composers` — `Composer` trait + `NdjsonComposer`/`JsonArrayComposer` + `ComposerBackend` dispatcher
-  - `collectors` — `PayloadCollector` trait + `NdjsonCollector`/`JsonArrayCollector` + `CollectorBackend` dispatcher
   - `transforms` — `Transform` trait + `DocumentTransformer` enum (Cow-based)
   - `supervisors` — pipeline orchestration (Supervisor + workers); no config submodule — config lives in `app_config`
   - `common` — `Hit`/`HitBatch` (legacy dead code)
   - `progress` — TUI metrics
 
-## Pipeline Architecture (current — Raw Pages + Composer)
+## Pipeline Architecture (current — Raw Pages + Composer + Controller)
 ```
-Source.next_page() → Option<String> (raw page)
+Controller.output() → batch_size_hint
+  → Source.set_page_size_hint(hint)
+  → Source.next_page() → Option<String> (raw page)
+  → Controller.measure(page.len())
   → channel(String)
   → SinkWorker buffers Vec<String> (by byte size threshold)
   → Composer.compose(&buffer, &transformer) → final payload String
@@ -39,16 +44,17 @@ Source.next_page() → Option<String> (raw page)
 
 ## Module Dependency Graph
 ```
-lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
+lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig, ControllerConfig)
   │              │
   │              ▼
   │         backends ──► backends/common_config (CommonSinkConfig, CommonSourceConfig)
   │              │              ↑ (imported by backend-specific configs to embed)
   │              ▼
-  │         supervisors ──► workers (SourceWorker, SinkWorker)
+  │         supervisors ──► workers (SourceWorker w/ ControllerBackend, SinkWorker)
   │              │                │
   ├──► transforms ◄───────────────┘ (called by Composer)
-  └──► composers  ◄── SinkWorker (holds ComposerBackend + DocumentTransformer)
+  ├──► composers  ◄── SinkWorker (holds ComposerBackend + DocumentTransformer)
+  └──► controllers ◄── SourceWorker (holds ControllerBackend, feeds output to Source)
 
 ```
 
@@ -66,25 +72,25 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 - **All abstractions follow the same pattern**: trait → concrete impls → enum dispatcher → from_config resolver
 - **Zero-copy passthrough**: NDJSON→NDJSON scenarios (file-to-file) — Cow borrows from buffered pages, no per-doc allocation
 
-## Architecture Pattern (used by backends, transforms, composers)
+## Architecture Pattern (used by backends, transforms, composers, controllers)
 ```
-┌──────────────────┐   ┌──────────────────────┐   ┌─────────────────────┐
-│ trait Source      │   │ trait Transform       │   │ trait Composer      │
-│   fn next_page() │   │   fn transform(&str)  │   │   fn compose(pages) │
-│   → Option<Str>  │   │   → Vec<Cow<str>>     │   │   → String          │
-└────────┬─────────┘   └────────┬─────────────┘   └────────┬────────────┘
-         │                      │                           │
-┌────────┴─────────┐   ┌────────┴─────────────┐   ┌────────┴────────────┐
-│ FileSource       │   │ RallyS3ToEs          │   │ NdjsonComposer      │
-│ InMemorySource   │   │ Passthrough          │   │ JsonArrayComposer   │
-│ ElasticsearchSrc │   │                      │   │                     │
-│ S3RallySource    │   │                      │   │                     │
-└────────┬─────────┘   └────────┬─────────────┘   └────────┬────────────┘
-         │                      │                           │
-┌────────┴─────────┐   ┌────────┴─────────────┐   ┌────────┴────────────┐
-│ enum SourceBknd  │   │ enum DocTransformer   │   │ enum ComposerBknd   │
-│   match dispatch │   │   match dispatch      │   │   match dispatch    │
-└──────────────────┘   └──────────────────────┘   └─────────────────────┘
+┌──────────────────┐ ┌──────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
+│ trait Source      │ │ trait Transform       │ │ trait Composer      │ │ trait Controller     │
+│   fn next_page() │ │   fn transform(&str)  │ │   fn compose(pages) │ │   fn output() → usize│
+│   → Option<Str>  │ │   → Vec<Cow<str>>     │ │   → String          │ │   fn measure(f64)    │
+└────────┬─────────┘ └────────┬─────────────┘ └────────┬────────────┘ └────────┬────────────┘
+         │                    │                         │                       │
+┌────────┴─────────┐ ┌────────┴─────────────┐ ┌────────┴────────────┐ ┌────────┴────────────┐
+│ FileSource       │ │ RallyS3ToEs          │ │ NdjsonComposer      │ │ ConfigController     │
+│ InMemorySource   │ │ Passthrough          │ │ JsonArrayComposer   │ │ PidBytesToDocCount   │
+│ ElasticsearchSrc │ │                      │ │                     │ │                      │
+│ S3RallySource    │ │                      │ │                     │ │                      │
+└────────┬─────────┘ └────────┬─────────────┘ └────────┬────────────┘ └────────┬────────────┘
+         │                    │                         │                       │
+┌────────┴─────────┐ ┌────────┴─────────────┐ ┌────────┴────────────┐ ┌────────┴────────────┐
+│ enum SourceBknd  │ │ enum DocTransformer   │ │ enum ComposerBknd   │ │ enum ControllerBknd  │
+│   match dispatch │ │   match dispatch      │ │   match dispatch    │ │   match dispatch     │
+└──────────────────┘ └──────────────────────┘ └─────────────────────┘ └──────────────────────┘
 ```
 
 ## Resolution Tables
@@ -107,11 +113,18 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 | File | `NdjsonComposer` | `item\nitem\n` |
 | InMemory | `JsonArrayComposer` | `[item,item]` |
 
+### Controller Resolution (from `[controller]` config section)
+| Config type | Controller | Behavior |
+|---|---|---|
+| `static` (default) | `ConfigController` | Returns configured `max_batch_size_docs`, ignores measurements |
+| `pid_bytes_to_doc_count` | `PidBytesToDocCount` | PID feedback: measures response bytes → adjusts doc count output |
+
 ## Responsibility Boundaries
 
 | Component | Responsibility |
 |---|---|
-| Source | Read raw page, return `Option<String>`. Format-ignorant. |
+| Controller | Adaptive batch sizing: `output()` → doc count hint, `measure()` ← response bytes |
+| Source | Read raw page, return `Option<String>`. Accepts `set_page_size_hint()`. Format-ignorant. |
 | Channel | Carry `String` (raw pages) between workers |
 | SinkWorker | Buffer pages by byte size, flush via Composer |
 | Composer | Transform pages (via Transformer) + assemble wire-format payload |
@@ -147,7 +160,8 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 - v6-v9 backend file splits: separated backend implementations into dedicated files with re-export shims
 - v10 raw pages + composers (current): Source returns `Option<String>` (raw page), Transform returns `Vec<Cow<str>>` (zero-copy), Composer replaces Collector (transform+assemble in one shot), SinkWorker buffers by byte size. 31 tests passing.
 - v11 config migration (complete): `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs`; `supervisors/config.rs` deleted; all callers updated. 31 tests passing.
-- v12 S3 Rally source (current): `S3RallySource` streams Rally benchmark track data from S3. `RallyTrack` enum validates track names. Config: track, bucket, region, optional key override, CommonSourceConfig. Transport: `GetObject` → `ByteStream::into_async_read()` → `BufReader` → `read_line()` (same loop as FileSource). Transform routing: S3Rally→File = Passthrough, S3Rally→ES = RallyS3ToEs. 44 tests passing.
+- v12 S3 Rally source: `S3RallySource` streams Rally benchmark track data from S3. `RallyTrack` enum validates track names. Config: track, bucket, region, optional key override, CommonSourceConfig. Transport: `GetObject` → `ByteStream::into_async_read()` → `BufReader` → `read_line()` (same loop as FileSource). Transform routing: S3Rally→File = Passthrough, S3Rally→ES = RallyS3ToEs. 44 tests passing.
+- v13 PID controller (current): Adaptive batch sizing via `Controller` trait. Two impls: `ConfigController` (static, default) and `PidBytesToDocCount` (PID feedback loop ported from C#). `Source` trait gains `set_page_size_hint()`. `SourceWorker` owns `ControllerBackend`, runs feedback loop: `output()` → `set_page_size_hint()` → `next_page()` → `measure()`. `ControllerConfig` in `AppConfig` (`[controller]` TOML section). PID gains auto-calculated. EMA smoothing on measurements (α=0.25) and adjustments (α=0.75). Anti-windup clamping. 66 tests passing.
 
 ## S3 Rally Source Configuration Example
 ```toml
@@ -167,3 +181,21 @@ sink_parallelism = 1
 
 ### Available Rally Tracks
 big5, clickbench, eventdata, geonames, geopoint, geopointshape, geoshape, http_logs, nested, neural_search, noaa, noaa_semantic_search, nyc_taxis, percolator, pmc, so, treccovid_semantic_search, vectorsearch
+
+## Controller Configuration Example
+```toml
+# Static (default — preserves existing behavior, no PID):
+[controller]
+type = "static"
+
+# PID bytes-to-doc-count (adaptive batch sizing):
+[controller]
+type = "pid_bytes_to_doc_count"
+desired_response_size_bytes = 5242880.0  # 5MB target response size
+initial_doc_count = 1000                  # starting guess
+min_doc_count = 10                        # floor
+max_doc_count = 50000                     # ceiling
+```
+
+## PID Controller Theory
+Set-point = desired response bytes. Measured = actual response bytes (EMA-smoothed, α=0.25). Error = desired - measured. PID gains auto-calculated: Kp = max(max_docs, desired)/min(max_docs, desired), Ki = Kp/50, Kd = sqrt(Kp×Ki). Adjustment = (P+I+D)/avg_response_size, clamped to [-100,+100]. Output = EMA(current + adj, α=0.75), clamped to [min,max].

@@ -15,6 +15,7 @@
 mod workers;
 use crate::app_config::AppConfig;
 use crate::composers::ComposerBackend;
+use crate::controllers::ControllerBackend;
 use crate::supervisors::workers::Worker;
 use crate::transforms::DocumentTransformer;
 use anyhow::{Context, Result};
@@ -57,6 +58,7 @@ impl Supervisor {
         transformer: DocumentTransformer,
         composer: ComposerBackend,
         max_request_size_bytes: usize,
+        controller: ControllerBackend,
     ) -> Result<()> {
         // 📬 Channel carries String — raw pages from source to sink workers.
         let (tx, rx) = async_channel::bounded(self.app_config.runtime.queue_capacity);
@@ -76,7 +78,8 @@ impl Supervisor {
         }
 
         // 🚰 Spawn the source worker — it pumps raw pages into the channel.
-        let source_worker = workers::SourceWorker::new(tx.clone(), source_backend);
+        // Now with a controller for adaptive batch sizing! The PID rides shotgun. 🎛️
+        let source_worker = workers::SourceWorker::new(tx.clone(), source_backend, controller);
         worker_handles.push(source_worker.start());
 
         let results = futures::future::join_all(worker_handles).await;

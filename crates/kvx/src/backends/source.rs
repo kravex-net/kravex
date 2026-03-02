@@ -28,6 +28,20 @@ pub(crate) trait Source: std::fmt::Debug {
     /// Returns `Ok(None)` when the tap runs dry. EOF. Fin. The end. 🏁
     /// Returns `Err(...)` when something has gone sideways, sidelong, or fully upside-down.
     async fn next_page(&mut self) -> Result<Option<String>>;
+
+    /// 🎛️ Hint the source about the desired page size (doc count) for the next fetch.
+    ///
+    /// Called by the SourceWorker before each `next_page()`, with the controller's
+    /// recommended batch size. Sources that support dynamic sizing should update their
+    /// internal `max_batch_size_docs` accordingly. Sources that don't care can ignore it.
+    ///
+    /// Default: no-op. Like sending a suggestion email — it arrives, it's read, nothing changes.
+    /// "He who hints but does not enforce, suggests in vain." — Ancient trait proverb 📜
+    fn set_page_size_hint(&mut self, _doc_count: usize) {
+        // 🧘 Default implementation: the hint is acknowledged and gently ignored.
+        // Sources that support dynamic batch sizing override this.
+        // InMemorySource and ElasticsearchSource (currently) use the default.
+    }
 }
 
 /// 🎭 The many faces of a Source — a polymorphic casting call for data origins.
@@ -55,6 +69,17 @@ impl Source for SourceBackend {
             SourceBackend::File(f) => f.next_page().await,
             SourceBackend::Elasticsearch(es) => es.next_page().await,
             SourceBackend::S3Rally(s3) => s3.next_page().await,
+        }
+    }
+
+    /// 🎛️ Dispatch set_page_size_hint to the wrapped source.
+    /// Each backend decides what to do with it. Some listen. Some don't. Like children.
+    fn set_page_size_hint(&mut self, doc_count: usize) {
+        match self {
+            SourceBackend::InMemory(i) => i.set_page_size_hint(doc_count),
+            SourceBackend::File(f) => f.set_page_size_hint(doc_count),
+            SourceBackend::Elasticsearch(es) => es.set_page_size_hint(doc_count),
+            SourceBackend::S3Rally(s3) => s3.set_page_size_hint(doc_count),
         }
     }
 }

@@ -349,6 +349,13 @@ impl S3RallySource {
 
 #[async_trait]
 impl Source for S3RallySource {
+    /// 🎛️ Update the batch size hint from the controller.
+    /// S3RallySource respects this by adjusting `max_batch_size_docs` — the doc count cap per page.
+    /// The PID controller whispers a number. We listen. We adjust. We fetch. We measure. We loop.
+    fn set_page_size_hint(&mut self, doc_count: usize) {
+        self.source_config.common_config.max_batch_size_docs = doc_count;
+    }
+
     /// 📄 Read the next page of lines from the S3 byte stream. Returns `None` when exhausted.
     ///
     /// 🧠 Knowledge graph: identical loop to `FileSource::next_page()` — same exit conditions:
