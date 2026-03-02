@@ -330,6 +330,14 @@ async fn run_migration(args: RunArgs) -> Result<()> {
         source_config: the_source_config,
         sink_config: the_sink_config,
         runtime: the_runtime_config,
+        // 🎛️ Default to Static controller — no PID drama, preserves existing CLI behavior.
+        // 🦆 The duck has nothing to say about PID controllers. It just quacks.
+        // Knowledge graph: ControllerConfig::Static is the zero-config default; PidBytesToDocCount
+        // requires explicit TOML config. CLI does not expose PID knobs as flags yet —
+        // users who want adaptive batch sizing must supply a config file.
+        // Using Default::default() here because ControllerConfig is pub(crate) in kvx — it is
+        // not re-exported, so we lean on type inference + the Default impl to fill this slot.
+        controller: Default::default(),
     };
 
     // 🚀 SEND IT. No take-backs. This is not a drill.

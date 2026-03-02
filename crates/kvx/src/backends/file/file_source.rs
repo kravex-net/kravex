@@ -117,6 +117,13 @@ impl FileSource {
 
 #[async_trait]
 impl Source for FileSource {
+    /// 🎛️ Update the batch size hint from the controller.
+    /// FileSource respects this by adjusting `max_batch_size_docs` — the doc count cap per page.
+    /// "He who listens to the controller, fetches the right amount." — Ancient batch proverb 📜
+    fn set_page_size_hint(&mut self, doc_count: usize) {
+        self.source_config.common_config.max_batch_size_docs = doc_count;
+    }
+
     /// 📄 Read the next page of lines from the file. Returns `None` when EOF.
     ///
     /// 🧠 Knowledge graph: sources return `Option<String>` — one raw page of newline-delimited

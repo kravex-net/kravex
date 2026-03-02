@@ -22,7 +22,7 @@ use crate::backends::file::{FileSink, FileSource};
 use crate::backends::in_mem::{InMemorySink, InMemorySource};
 use crate::backends::s3_rally::S3RallySource;
 use crate::backends::{SinkBackend, SourceBackend};
-use crate::controllers::ThrottleControllerBackend;
+use crate::controllers::{ControllerBackend, ThrottleControllerBackend};
 use crate::supervisors::Supervisor;
 use crate::app_config::{RuntimeConfig, SinkConfig, SourceConfig};
 use crate::composers::ComposerBackend;
@@ -96,9 +96,25 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
         throttle_controllers.push(controller);
     }
 
+    // 🎛️ Resolve the controller from config.
+    // Static = fixed batch size (default, preserves existing behavior).
+    // PidBytesToDocCount = adaptive feedback-driven batch sizing (the fancy one).
+    // 🧠 Knowledge graph: controller lives in SourceWorker, feeds output to source.set_page_size_hint().
+    let the_default_page_size = app_config.source_config.default_page_size();
+    let the_controller =
+        ControllerBackend::from_config(&app_config.controller, the_default_page_size);
+
     let supervisor = Supervisor::new(app_config.clone());
     supervisor
-        .start_workers(source_backend, sink_backends, transformer, composer, throttle_controllers)
+        .start_workers(
+            source_backend,
+            sink_backends,
+            transformer,
+            composer,
+            max_request_size_bytes,
+            the_controller,
+            throttle_controllers,
+        )
         .await?;
 
     info!(
@@ -196,6 +212,7 @@ mod tests {
             },
             source_config: SourceConfig::InMemory(()),
             sink_config: SinkConfig::InMemory(()),
+            controller: crate::controllers::ControllerConfig::default(),
         };
 
         let source = SourceBackend::InMemory(InMemorySource::new().await?);
@@ -215,9 +232,15 @@ mod tests {
         let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
         let throttle_controllers = vec![ThrottleControllerBackend::new_static(max_request_size_bytes)];
 
+        // 🎛️ Static controller for testing — no PID, just the configured batch size
+        let the_controller = ControllerBackend::from_config(
+            &crate::controllers::ControllerConfig::default(),
+            1000,
+        );
+
         let supervisor = Supervisor::new(app_config);
         supervisor
-            .start_workers(source, vec![sink], transformer, composer, throttle_controllers)
+            .start_workers(source, vec![sink], transformer, composer, max_request_size_bytes, the_controller, throttle_controllers)
             .await?;
 
         // 📦 SinkWorker received 1 page (4 docs newline-delimited), passthrough composed into JSON array.
