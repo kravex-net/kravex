@@ -56,3 +56,7 @@ aws-sdk-s3 = "1"
 # 🔧 aws-config — the magic incantation that finds your credentials
 # in env vars, IAM roles, ~/.aws/config, or possibly your dreams
 aws-config = { version = "1", features = ["behavior-version-latest"] }
+
+# 👏 clap — because parsing CLI args by hand is a form of self-harm
+# that even the borrow checker wouldn't approve of
+clap = { version = "4", features = ["derive"] }

@@ -138,6 +138,47 @@ impl std::fmt::Display for RallyTrack {
     }
 }
 
+impl std::str::FromStr for RallyTrack {
+    type Err = String;
+    /// 🔄 Parse a CLI string into a RallyTrack variant.
+    /// Mirrors `as_str()` in reverse — the Uno reverse card of serialization. 🃏
+    ///
+    /// 🧠 Knowledge graph: CLI passes `--source-track geonames`, clap calls this,
+    /// we get `RallyTrack::Geonames`. No serde involved. Pure FromStr energy.
+    /// If the string doesn't match, we return an error that lists every valid track
+    /// because helpful error messages are literature, not log spam. 📖🦆
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "big5" => Ok(Self::Big5),
+            "clickbench" => Ok(Self::Clickbench),
+            "eventdata" => Ok(Self::Eventdata),
+            "geonames" => Ok(Self::Geonames),
+            "geopoint" => Ok(Self::Geopoint),
+            "geopointshape" => Ok(Self::Geopointshape),
+            "geoshape" => Ok(Self::Geoshape),
+            "http_logs" => Ok(Self::HttpLogs),
+            "nested" => Ok(Self::Nested),
+            "neural_search" => Ok(Self::NeuralSearch),
+            "noaa" => Ok(Self::Noaa),
+            "noaa_semantic_search" => Ok(Self::NoaaSemanticSearch),
+            "nyc_taxis" => Ok(Self::NycTaxis),
+            "percolator" => Ok(Self::Percolator),
+            "pmc" => Ok(Self::Pmc),
+            "so" => Ok(Self::So),
+            "treccovid_semantic_search" => Ok(Self::TreccovidSemanticSearch),
+            "vectorsearch" => Ok(Self::Vectorsearch),
+            honestly_who_knows => Err(format!(
+                "💀 Unknown rally track '{}'. Valid tracks: big5, clickbench, eventdata, \
+                 geonames, geopoint, geopointshape, geoshape, http_logs, nested, \
+                 neural_search, noaa, noaa_semantic_search, nyc_taxis, percolator, \
+                 pmc, so, treccovid_semantic_search, vectorsearch. \
+                 We looked everywhere. Under the couch. Behind the fridge. Nothing.",
+                honestly_who_knows
+            )),
+        }
+    }
+}
+
 // ============================================================
 //  🔧 S3RallySourceConfig — knobs, dials, and one track name
 // ============================================================

@@ -26,4 +26,5 @@
 
 mod s3_rally_source;
 
-pub(crate) use s3_rally_source::{RallyTrack, S3RallySource, S3RallySourceConfig};
+pub(crate) use s3_rally_source::S3RallySource;
+pub use s3_rally_source::{RallyTrack, S3RallySourceConfig};

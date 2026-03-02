@@ -13,11 +13,11 @@
 //!
 //! 🦆 The duck is here because every file must have one. This is law. Do not question the duck.
 
-pub(crate) mod common_config;
-pub(crate) mod elasticsearch;
-pub(crate) mod file;
-pub(crate) mod in_mem;
-pub(crate) mod s3_rally;
+pub mod common_config;
+pub mod elasticsearch;
+pub mod file;
+pub mod in_mem;
+pub mod s3_rally;
 pub(crate) mod sink;
 pub(crate) mod source;
 
@@ -26,9 +26,9 @@ pub(crate) mod source;
 // Convenience is a feature. So is not typing "backends::file::" fourteen times per file.
 // 🧠 CommonSinkConfig/CommonSourceConfig live here too — they're backend-primitive types
 // shared by every backend config struct. app_config imports them from here to avoid 🔄 circular deps.
-pub(crate) use common_config::{CommonSinkConfig, CommonSourceConfig, ThrottleConfig};
-pub(crate) use elasticsearch::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
-pub(crate) use file::{FileSinkConfig, FileSourceConfig};
-pub(crate) use s3_rally::{S3RallySourceConfig, RallyTrack};
+pub use common_config::{CommonSinkConfig, CommonSourceConfig, ThrottleConfig};
+pub use elasticsearch::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
+pub use file::{FileSinkConfig, FileSourceConfig};
+pub use s3_rally::{S3RallySourceConfig, RallyTrack};
 pub(crate) use sink::{Sink, SinkBackend};
 pub(crate) use source::{Source, SourceBackend};

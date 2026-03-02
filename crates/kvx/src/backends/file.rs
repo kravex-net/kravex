@@ -24,5 +24,7 @@
 mod file_sink;
 mod file_source;
 
-pub(crate) use file_sink::{FileSink, FileSinkConfig};
-pub(crate) use file_source::{FileSource, FileSourceConfig};
+pub(crate) use file_sink::FileSink;
+pub use file_sink::FileSinkConfig;
+pub(crate) use file_source::FileSource;
+pub use file_source::FileSourceConfig;

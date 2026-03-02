@@ -132,6 +132,17 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 | Transform | Per-page → `Vec<Cow<str>>` items (Borrowed=passthrough, Owned=conversion) |
 | Sink | Pure I/O: HTTP POST, file write, memory push |
 
+## Public API (for kvx-cli)
+
+Config types exposed via `pub mod backends` + `pub mod transforms`:
+- `kvx::backends::{FileSourceConfig, FileSinkConfig, ElasticsearchSourceConfig, ElasticsearchSinkConfig, S3RallySourceConfig, RallyTrack, CommonSourceConfig, CommonSinkConfig}`
+- `kvx::transforms::{FlowDescriptor, supported_flows()}`
+- `kvx::app_config::{AppConfig, RuntimeConfig, SourceConfig, SinkConfig}`
+
+Backend impls (`Source`, `Sink`, `SourceBackend`, `SinkBackend`) remain `pub(crate)`.
+
+`RallyTrack` implements `FromStr` for CLI arg parsing (mirrors `as_str()` in reverse).
+
 # Notes for future reference
 
 - POC/MVP stage — API surface is unstable
@@ -168,7 +179,8 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 - v10 raw pages + composers (current): Source returns `Option<String>` (raw page), Transform returns `Vec<Cow<str>>` (zero-copy), Composer replaces Collector (transform+assemble in one shot), SinkWorker buffers by byte size. 31 tests passing.
 - v11 config migration (complete): `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs`; `supervisors/config.rs` deleted; all callers updated. 31 tests passing.
 - v12 S3 Rally source: `S3RallySource` streams Rally benchmark track data from S3. `RallyTrack` enum validates track names. Config: track, bucket, region, optional key override, CommonSourceConfig. Transport: `GetObject` → `ByteStream::into_async_read()` → `BufReader` → `read_line()` (same loop as FileSource). Transform routing: S3Rally→File = Passthrough, S3Rally→ES = RallyS3ToEs. 44 tests passing.
-- v13 PID controller throttling (current): Adaptive throttling system for SinkWorker. `ThrottleController` trait → `StaticThrottleController` (fixed bytes) + `PidControllerBytesToMs` (PID feedback loop, LICENSE-EE/BSL). Config-driven via `ThrottleConfig` enum in `CommonSinkConfig`. SinkWorker measures `sink.send()` duration → feeds to controller → reads dynamic output for next cycle. PID gains auto-tuned from ratio of initial output to set point. EMA smoothing (α=0.25), anti-windup (±5×set_point), output clamping. 55 tests passing.
+- v13 public API + FlowDescriptor: `backends` and `transforms` modules made `pub`. Config struct re-exports changed from `pub(crate)` to `pub`. `FlowDescriptor` + `supported_flows()` added to transforms.rs as CLI source of truth. `RallyTrack` gained `FromStr` impl. Drift-detection test ensures `supported_flows()` ↔ `from_configs()` sync. 45 tests passing.
+- v14 PID controller throttling (current): Adaptive throttling system for SinkWorker. `ThrottleController` trait → `StaticThrottleController` (fixed bytes) + `PidControllerBytesToMs` (PID feedback loop, LICENSE-EE/BSL). Config-driven via `ThrottleConfig` enum in `CommonSinkConfig`. SinkWorker measures `sink.send()` duration → feeds to controller → reads dynamic output for next cycle. PID gains auto-tuned from ratio of initial output to set point. EMA smoothing (α=0.25), anti-windup (±5×set_point), output clamping. 55 tests passing.
 
 ## S3 Rally Source Configuration Example
 ```toml

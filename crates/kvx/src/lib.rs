@@ -9,12 +9,12 @@
 // -- 🗑️ TODO: clean up the dedz (dead code, not the grateful kind)
 #![allow(dead_code, unused_variables, unused_imports)]
 pub mod app_config;
-pub(crate) mod backends;
+pub mod backends;
 pub(crate) mod composers;
 pub(crate) mod controllers;
 pub(crate) mod progress;
 mod supervisors;
-pub(crate) mod transforms;
+pub mod transforms;
 use crate::app_config::AppConfig;
 use crate::backends::common_config::ThrottleConfig;
 use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSource};
