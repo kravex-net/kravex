@@ -25,6 +25,7 @@ You _MUST_ utilize tools in such a way that the tools usage results in the least
 - You must embed knowledge graph information into README.md updates.
 - You must update README.md files as you complete any given piece of work.
 - You must update README.md at least once for every 50,000 tokens.
+- mod.rs files are BANNED. You _MUST NOT CREATE ANY mod.rs FILE EVER_
 
 # README.md mandatory format:
 ```
