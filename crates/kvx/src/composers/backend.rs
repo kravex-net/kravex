@@ -58,6 +58,8 @@ impl ComposerBackend {
         match sink {
             // -- 📡 ES bulk requires NDJSON — action+source pairs, trailing \n
             SinkConfig::Elasticsearch(_) => Self::Ndjson(NdjsonComposer),
+            // -- 🔍 OpenSearch bulk: same NDJSON format as ES. The fork preserved the wire format.
+            SinkConfig::OpenSearch(_) => Self::Ndjson(NdjsonComposer),
             // -- 📡 File sinks: NDJSON — one doc per line, trailing \n, everyone's happy
             SinkConfig::File(_) => Self::Ndjson(NdjsonComposer),
             // -- 📦 InMemory: JSON array — test assertions want `[doc1,doc2]` not `doc1\ndoc2\n`
@@ -132,5 +134,27 @@ mod tests {
         let result = composer.compose(&pages, &passthrough_transformer())?;
         assert_eq!(result, r#"[{"a":1},{"b":2}]"#);
         Ok(())
+    }
+
+    /// 🧪 OpenSearch sink config resolves to NdjsonComposer — same wire format as ES.
+    /// The fork kept the bulk API. The composer doesn't care about your licensing drama.
+    #[test]
+    fn backend_the_one_where_opensearch_resolves_to_ndjson() {
+        use crate::backends::opensearch::OpenSearchSinkConfig;
+        use crate::backends::CommonSinkConfig;
+        let config = SinkConfig::OpenSearch(OpenSearchSinkConfig {
+            url: "https://localhost:9200".into(),
+            username: None,
+            password: None,
+            api_key: None,
+            index: Some("test-idx".into()),
+            danger_accept_invalid_certs: true,
+            common_config: CommonSinkConfig::default(),
+        });
+        let composer = ComposerBackend::from_sink_config(&config);
+        assert!(
+            matches!(composer, ComposerBackend::Ndjson(_)),
+            "OpenSearch sink → NdjsonComposer: the bulk API speaks NDJSON, always has, always will"
+        );
     }
 }

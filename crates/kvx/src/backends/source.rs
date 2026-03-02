@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
-use crate::backends::{elasticsearch, file, in_mem, s3_rally};
+use crate::backends::{elasticsearch, file, in_mem, opensearch, s3_rally};
 
 /// 🚰 A source that produces one raw page per call — maximally ignorant of content format.
 ///
@@ -43,6 +43,8 @@ pub(crate) enum SourceBackend {
     InMemory(in_mem::InMemorySource),
     File(file::FileSource),
     Elasticsearch(elasticsearch::ElasticsearchSource),
+    /// 🔍 OpenSearch source — PIT + search_after pagination, the ES fork that dared to be free
+    OpenSearch(opensearch::OpenSearchSource),
     /// 🪣 S3 Rally source — benchmark data straight from the cloud, no layover
     S3Rally(s3_rally::S3RallySource),
 }
@@ -54,6 +56,7 @@ impl Source for SourceBackend {
             SourceBackend::InMemory(i) => i.next_page().await,
             SourceBackend::File(f) => f.next_page().await,
             SourceBackend::Elasticsearch(es) => es.next_page().await,
+            SourceBackend::OpenSearch(os) => os.next_page().await,
             SourceBackend::S3Rally(s3) => s3.next_page().await,
         }
     }

@@ -54,6 +54,7 @@ use crate::app_config::{SinkConfig, SourceConfig};
 use anyhow::Result;
 use std::borrow::Cow;
 
+pub(crate) mod es_hit_to_bulk;
 pub(crate) mod passthrough;
 pub(crate) mod rally_s3_to_es;
 
@@ -119,6 +120,8 @@ pub(crate) trait Transform: std::fmt::Debug {
 #[derive(Debug, Clone)]
 pub(crate) enum DocumentTransformer {
     RallyS3ToEs(rally_s3_to_es::RallyS3ToEs),
+    /// 🔄 Search hit → bulk action pair. ES/OpenSearch source output → ES/OpenSearch bulk input.
+    EsHitToBulk(es_hit_to_bulk::EsHitToBulk),
     Passthrough(passthrough::Passthrough),
 }
 
@@ -153,11 +156,29 @@ impl DocumentTransformer {
                 Self::RallyS3ToEs(rally_s3_to_es::RallyS3ToEs)
             }
 
+            // -- 🔍📡 File/S3Rally → OpenSearch: same Rally transform as ES — bulk format is identical.
+            // -- "The fork that kept the API. The NDJSON that survived the divorce." 🎬
+            (SourceConfig::File(_), SinkConfig::OpenSearch(_))
+            | (SourceConfig::S3Rally(_), SinkConfig::OpenSearch(_)) => {
+                Self::RallyS3ToEs(rally_s3_to_es::RallyS3ToEs)
+            }
+
+            // -- 🔄📡 ES/OpenSearch → ES/OpenSearch: search hit format → bulk action pairs.
+            // -- The great migration dance: read from one cluster, write to another.
+            // -- Works for ES→OS, OS→ES, OS→OS, ES→ES. The bulk format is universal truth.
+            (SourceConfig::Elasticsearch(_), SinkConfig::OpenSearch(_))
+            | (SourceConfig::OpenSearch(_), SinkConfig::OpenSearch(_))
+            | (SourceConfig::OpenSearch(_), SinkConfig::Elasticsearch(_))
+            | (SourceConfig::Elasticsearch(_), SinkConfig::Elasticsearch(_)) => {
+                Self::EsHitToBulk(es_hit_to_bulk::EsHitToBulk)
+            }
+
             // -- 🚶 Passthrough pairs: same format, no conversion needed.
-            // -- File→File, InMemory→InMemory, ES→File, S3Rally→File — just move the bytes.
+            // -- File→File, InMemory→InMemory, ES→File, S3Rally→File, OS→File — just move the bytes.
             (SourceConfig::File(_), SinkConfig::File(_))
             | (SourceConfig::InMemory(_), SinkConfig::InMemory(_))
             | (SourceConfig::Elasticsearch(_), SinkConfig::File(_))
+            | (SourceConfig::OpenSearch(_), SinkConfig::File(_))
             | (SourceConfig::S3Rally(_), SinkConfig::File(_)) => {
                 Self::Passthrough(passthrough::Passthrough)
             }
@@ -186,6 +207,7 @@ impl Transform for DocumentTransformer {
     fn transform<'a>(&self, raw_source_page: &'a str) -> Result<Vec<Cow<'a, str>>> {
         match self {
             Self::RallyS3ToEs(t) => t.transform(raw_source_page),
+            Self::EsHitToBulk(t) => t.transform(raw_source_page),
             Self::Passthrough(t) => t.transform(raw_source_page),
         }
     }
@@ -383,6 +405,171 @@ mod tests {
         assert!(
             matches!(the_transformer, DocumentTransformer::RallyS3ToEs(_)),
             "S3Rally → ES should resolve to RallyS3ToEs — metadata stripping is not optional"
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // 🔍 OpenSearch resolution tests — the fork gets its own test suite
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// 🧠 Helper: builds an OpenSearchSinkConfig for tests. Because typing all those Nones
+    /// is like filling out a government form — necessary but soul-crushing.
+    fn opensearch_sink_config() -> SinkConfig {
+        use crate::backends::opensearch::OpenSearchSinkConfig;
+        SinkConfig::OpenSearch(OpenSearchSinkConfig {
+            url: "https://localhost:9200".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            index: Some("target-idx".to_string()),
+            danger_accept_invalid_certs: true,
+            common_config: CommonSinkConfig::default(),
+        })
+    }
+
+    /// 🧠 Helper: builds an OpenSearchSourceConfig wrapped in SourceConfig.
+    fn opensearch_source_config() -> SourceConfig {
+        use crate::backends::opensearch::OpenSearchSourceConfig;
+        SourceConfig::OpenSearch(OpenSearchSourceConfig {
+            url: "https://localhost:9200".to_string(),
+            index: "source-idx".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            danger_accept_invalid_certs: true,
+            query: None,
+            common_config: CommonSourceConfig::default(),
+        })
+    }
+
+    /// 🧪 File → OpenSearch resolves to RallyS3ToEs — bulk format is identical across the fork.
+    /// "He who shares a wire format, shares a transform." — Ancient NDJSON proverb
+    #[test]
+    fn the_one_where_file_to_opensearch_resolves_to_rally_transform() {
+        let source = SourceConfig::File(FileSourceConfig {
+            file_name: "rally_export.json".to_string(),
+            common_config: CommonSourceConfig::default(),
+        });
+        let the_transformer = DocumentTransformer::from_configs(&source, &opensearch_sink_config());
+        assert!(
+            matches!(the_transformer, DocumentTransformer::RallyS3ToEs(_)),
+            "File → OpenSearch should resolve to RallyS3ToEs — the bulk format survived the fork"
+        );
+    }
+
+    /// 🧪 S3Rally → OpenSearch resolves to RallyS3ToEs — cloud data meets forked search.
+    #[test]
+    fn the_one_where_s3_rally_to_opensearch_resolves_to_rally_transform() {
+        use crate::backends::s3_rally::S3RallySourceConfig;
+
+        let source = SourceConfig::S3Rally(S3RallySourceConfig {
+            track: crate::backends::s3_rally::RallyTrack::Geonames,
+            bucket: "benchmark-bucket".to_string(),
+            region: "us-west-2".to_string(),
+            key: None,
+            common_config: CommonSourceConfig::default(),
+        });
+        let the_transformer = DocumentTransformer::from_configs(&source, &opensearch_sink_config());
+        assert!(
+            matches!(the_transformer, DocumentTransformer::RallyS3ToEs(_)),
+            "S3Rally → OpenSearch: same transform, different logo on the search engine"
+        );
+    }
+
+    /// 🧪 ES → OpenSearch resolves to EsHitToBulk — the cross-engine migration transform.
+    /// Knock knock. Who's there? A search hit. A search hit who?
+    /// A search hit that needs to become bulk format before crossing the fork boundary.
+    #[test]
+    fn the_one_where_es_to_opensearch_resolves_to_es_hit_to_bulk() {
+        use crate::backends::elasticsearch::ElasticsearchSourceConfig;
+        let source = SourceConfig::Elasticsearch(ElasticsearchSourceConfig {
+            url: "http://es-cluster:9200".to_string(),
+            index: Some("legacy-data".to_string()),
+            username: None,
+            password: None,
+            api_key: None,
+            query: None,
+            common_config: CommonSourceConfig::default(),
+        });
+        let the_transformer = DocumentTransformer::from_configs(&source, &opensearch_sink_config());
+        assert!(
+            matches!(the_transformer, DocumentTransformer::EsHitToBulk(_)),
+            "ES → OpenSearch: search hits transform to bulk — the great migration"
+        );
+    }
+
+    /// 🧪 OpenSearch → OpenSearch resolves to EsHitToBulk — cluster-to-cluster reindex.
+    /// "It works on my cluster" — the OpenSearch version of "it works on my machine."
+    #[test]
+    fn the_one_where_opensearch_to_opensearch_resolves_to_es_hit_to_bulk() {
+        let the_transformer =
+            DocumentTransformer::from_configs(&opensearch_source_config(), &opensearch_sink_config());
+        assert!(
+            matches!(the_transformer, DocumentTransformer::EsHitToBulk(_)),
+            "OpenSearch → OpenSearch: same engine, different cluster, EsHitToBulk bridges the gap"
+        );
+    }
+
+    /// 🧪 OpenSearch → ES resolves to EsHitToBulk — the reverse migration.
+    /// Like a boomerang, but for documents. They came from ES, went to OS, now they're going back.
+    #[test]
+    fn the_one_where_opensearch_to_es_resolves_to_es_hit_to_bulk() {
+        let sink = SinkConfig::Elasticsearch(ElasticsearchSinkConfig {
+            url: "http://es-cluster:9200".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            index: Some("repatriated-data".to_string()),
+            common_config: CommonSinkConfig::default(),
+        });
+        let the_transformer = DocumentTransformer::from_configs(&opensearch_source_config(), &sink);
+        assert!(
+            matches!(the_transformer, DocumentTransformer::EsHitToBulk(_)),
+            "OpenSearch → ES: the reverse migration, EsHitToBulk handles both directions"
+        );
+    }
+
+    /// 🧪 OpenSearch → File resolves to Passthrough — dump the raw hits, sort it out later.
+    /// "He who dumps to file, procrastinates with intent." — Ancient backup proverb
+    #[test]
+    fn the_one_where_opensearch_to_file_resolves_to_passthrough() {
+        let sink = SinkConfig::File(FileSinkConfig {
+            file_name: "os-dump.json".to_string(),
+            common_config: CommonSinkConfig::default(),
+        });
+        let the_transformer = DocumentTransformer::from_configs(&opensearch_source_config(), &sink);
+        assert!(
+            matches!(the_transformer, DocumentTransformer::Passthrough(_)),
+            "OpenSearch → File: passthrough — raw hits, no transform, just vibes"
+        );
+    }
+
+    /// 🧪 ES → ES resolves to EsHitToBulk — same-engine reindex across clusters.
+    /// The borrow checker doesn't care about your cluster topology. Neither does this test.
+    #[test]
+    fn the_one_where_es_to_es_resolves_to_es_hit_to_bulk() {
+        use crate::backends::elasticsearch::ElasticsearchSourceConfig;
+        let source = SourceConfig::Elasticsearch(ElasticsearchSourceConfig {
+            url: "http://old-cluster:9200".to_string(),
+            index: Some("ancient-data".to_string()),
+            username: None,
+            password: None,
+            api_key: None,
+            query: None,
+            common_config: CommonSourceConfig::default(),
+        });
+        let sink = SinkConfig::Elasticsearch(ElasticsearchSinkConfig {
+            url: "http://new-cluster:9200".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            index: Some("modern-data".to_string()),
+            common_config: CommonSinkConfig::default(),
+        });
+        let the_transformer = DocumentTransformer::from_configs(&source, &sink);
+        assert!(
+            matches!(the_transformer, DocumentTransformer::EsHitToBulk(_)),
+            "ES → ES: same engine, different cluster. EsHitToBulk is the universal adapter."
         );
     }
 }

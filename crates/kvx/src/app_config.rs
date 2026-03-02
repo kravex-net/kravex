@@ -10,7 +10,7 @@ use anyhow::Context;
 use serde::Deserialize;
 // -- 🔧 To load the configuration, so I don't have to manually parse
 // -- environment variables or files. Bleh. Like doing taxes but for bytes.
-use crate::backends::{CommonSinkConfig, ElasticsearchSinkConfig, ElasticsearchSourceConfig, FileSinkConfig, FileSourceConfig, S3RallySourceConfig};
+use crate::backends::{CommonSinkConfig, ElasticsearchSinkConfig, ElasticsearchSourceConfig, FileSinkConfig, FileSourceConfig, OpenSearchSinkConfig, OpenSearchSourceConfig, S3RallySourceConfig};
 use figment::{
     Figment,
     providers::{Env, Format, Toml},
@@ -81,6 +81,8 @@ pub enum SourceConfig {
     Elasticsearch(ElasticsearchSourceConfig),
     /// 📂 Read from a local file (NDJSON or Rally JSON array)
     File(FileSourceConfig),
+    /// 🔍 Read from an OpenSearch index via PIT + search_after — the fork that reads
+    OpenSearch(OpenSearchSourceConfig),
     /// 🪣 Stream Rally benchmark data from an S3 bucket — geonames, pmc, nyc_taxis, etc.
     S3Rally(S3RallySourceConfig),
     /// 🧪 In-memory test source — 4 hardcoded docs, no I/O, no regrets
@@ -101,6 +103,8 @@ pub enum SinkConfig {
     Elasticsearch(ElasticsearchSinkConfig),
     /// 📂 Write to a local file (NDJSON)
     File(FileSinkConfig),
+    /// 🔍 Write to an OpenSearch index via bulk API — the ES fork's favorite endpoint
+    OpenSearch(OpenSearchSinkConfig),
     /// 🧪 In-memory test sink — captures payloads for assertion, no I/O
     InMemory(()),
 }
@@ -119,6 +123,7 @@ impl SinkConfig {
         match self {
             SinkConfig::Elasticsearch(es) => es.common_config.max_request_size_bytes,
             SinkConfig::File(f) => f.common_config.max_request_size_bytes,
+            SinkConfig::OpenSearch(os) => os.common_config.max_request_size_bytes,
             // 🧠 InMemory gets the default — it's testing, we don't limit 🦆
             SinkConfig::InMemory(_) => CommonSinkConfig::default().max_request_size_bytes,
         }

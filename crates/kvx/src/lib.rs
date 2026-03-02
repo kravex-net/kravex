@@ -18,6 +18,7 @@ use crate::app_config::AppConfig;
 use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSource};
 use crate::backends::file::{FileSink, FileSource};
 use crate::backends::in_mem::{InMemorySink, InMemorySource};
+use crate::backends::opensearch::{OpenSearchSink, OpenSearchSource};
 use crate::backends::s3_rally::S3RallySource;
 use crate::backends::{SinkBackend, SourceBackend};
 use crate::supervisors::Supervisor;
@@ -96,6 +97,12 @@ async fn from_source_config(config: &AppConfig) -> Result<SourceBackend> {
             let src = ElasticsearchSource::new(es_cfg.clone()).await?;
             Ok(SourceBackend::Elasticsearch(src))
         }
+        // -- 🔍 The OpenSearch arm: same API, different logo. The fork that launched
+        // -- a thousand clusters. PIT + search_after for consistent pagination.
+        SourceConfig::OpenSearch(os_cfg) => {
+            let src = OpenSearchSource::new(os_cfg.clone()).await?;
+            Ok(SourceBackend::OpenSearch(src))
+        }
         // -- 🪣 The S3 Rally arm: cloud data, benchmark vibes, IAM permissions that
         // -- may or may not exist. The cloud giveth and the cloud taketh away.
         SourceConfig::S3Rally(s3_cfg) => {
@@ -124,6 +131,13 @@ async fn from_sink_config(config: &AppConfig) -> Result<SinkBackend> {
         SinkConfig::Elasticsearch(es_cfg) => {
             let sink = ElasticsearchSink::new(es_cfg.clone()).await?;
             Ok(SinkBackend::Elasticsearch(sink))
+        }
+        // -- 🔍 OpenSearch sink: the fork's bulk API endpoint. Same NDJSON, same game,
+        // -- different badge. Now with optional self-signed cert support for dev clusters
+        // -- that haven't gotten around to proper TLS yet. We've all been there.
+        SinkConfig::OpenSearch(os_cfg) => {
+            let sink = OpenSearchSink::new(os_cfg.clone()).await?;
+            Ok(SinkBackend::OpenSearch(sink))
         }
     }
 }
