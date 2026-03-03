@@ -83,10 +83,7 @@ mod tests {
     fn ndjson_the_one_where_multiple_pages_compose() -> Result<()> {
         // 🧪 Two pages → two lines, each with trailing \n
         let composer = NdjsonComposer;
-        let pages = vec![
-            String::from(r#"{"doc":1}"#),
-            String::from(r#"{"doc":2}"#),
-        ];
+        let pages = vec![String::from(r#"{"doc":1}"#), String::from(r#"{"doc":2}"#)];
         let result = composer.compose(&pages, &passthrough_transformer())?;
         assert_eq!(result, "{\"doc\":1}\n{\"doc\":2}\n");
         Ok(())

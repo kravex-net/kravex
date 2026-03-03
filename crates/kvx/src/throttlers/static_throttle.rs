@@ -77,7 +77,11 @@ mod tests {
     fn the_one_where_static_means_static_and_nothing_ever_changes() {
         // -- 🧪 If this test fails, physics is broken
         let mut controller = StaticThrottleController::new(42_000_000);
-        assert_eq!(controller.output(), 42_000_000, "💀 The static controller changed its mind. This shouldn't happen unless we're in a parallel universe.");
+        assert_eq!(
+            controller.output(),
+            42_000_000,
+            "💀 The static controller changed its mind. This shouldn't happen unless we're in a parallel universe."
+        );
 
         // -- 🧪 Feed it measurements. Watch it not care.
         controller.measure(100.0);
@@ -85,7 +89,11 @@ mod tests {
         controller.measure(0.001);
         controller.measure(f64::MAX);
 
-        assert_eq!(controller.output(), 42_000_000, "💀 The static controller was swayed by measurements. It has betrayed its core identity.");
+        assert_eq!(
+            controller.output(),
+            42_000_000,
+            "💀 The static controller was swayed by measurements. It has betrayed its core identity."
+        );
     }
 
     /// 🧪 The one where zero bytes is a valid but questionable life choice
@@ -93,7 +101,11 @@ mod tests {
     fn the_one_where_zero_bytes_is_technically_valid() {
         // -- 🧪 Edge case: "I want to send nothing, forever"
         let controller = StaticThrottleController::new(0);
-        assert_eq!(controller.output(), 0, "💀 Zero should mean zero. This isn't a Zen koan.");
+        assert_eq!(
+            controller.output(),
+            0,
+            "💀 Zero should mean zero. This isn't a Zen koan."
+        );
     }
 
     /// 🧪 The pilot episode where we establish the controller's personality
@@ -101,6 +113,10 @@ mod tests {
     fn pilot_episode_the_controller_is_born() {
         // -- 🧪 A controller is born. It has one purpose. One number. One truth.
         let controller = StaticThrottleController::new(10_485_760);
-        assert_eq!(controller.output(), 10_485_760, "💀 10MB should be 10MB. Math is math.");
+        assert_eq!(
+            controller.output(),
+            10_485_760,
+            "💀 10MB should be 10MB. Math is math."
+        );
     }
 }

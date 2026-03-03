@@ -223,8 +223,6 @@ impl Controller for PidBytesToDocCount {
     /// 6. Clamp adjustment to [-100, +100] (no wild swings)
     /// 7. EMA-smooth the doc count adjustment
     /// 8. Clamp final output to [min_doc_count, max_doc_count]
-    ///
-
     fn measure(&mut self, measured_response_size_bytes: f64) {
         // 📏 Record the raw measurement for observability
         self.the_last_measured_value = measured_response_size_bytes;
@@ -286,8 +284,7 @@ impl Controller for PidBytesToDocCount {
         //  worth of adjustment does this byte-level error represent?"
         //  Clamp to [-100, +100] to prevent extreme single-step changes.
         // ══════════════════════════════════════════════════════════
-        let the_output_doc_count_adjustment =
-            the_adjustment / self.the_average_response_size_bytes;
+        let the_output_doc_count_adjustment = the_adjustment / self.the_average_response_size_bytes;
         let the_clamped_adjustment = the_output_doc_count_adjustment.clamp(-100.0, 100.0);
 
         // ══════════════════════════════════════════════════════════
@@ -340,7 +337,12 @@ mod tests {
     const THE_MAX_DOCS: usize = 10_000;
 
     fn make_a_standard_pid() -> PidBytesToDocCount {
-        PidBytesToDocCount::new(THE_DESIRED_BYTES, THE_INITIAL_DOCS, THE_MIN_DOCS, THE_MAX_DOCS)
+        PidBytesToDocCount::new(
+            THE_DESIRED_BYTES,
+            THE_INITIAL_DOCS,
+            THE_MIN_DOCS,
+            THE_MAX_DOCS,
+        )
     }
 
     /// 🧪 Verify initial output matches the configured initial_doc_count.
@@ -602,13 +604,19 @@ mod tests {
         for _ in 0..100 {
             the_pid.measure(f64::MAX / 2.0);
         }
-        assert!(the_pid.output() >= 1, "Output must never be 0 — minimum viable batch is 1");
+        assert!(
+            the_pid.output() >= 1,
+            "Output must never be 0 — minimum viable batch is 1"
+        );
 
         let mut the_pid2 = PidBytesToDocCount::new(1_000_000.0, 1, 1, 10);
         for _ in 0..100 {
             the_pid2.measure(0.001);
         }
-        assert!(the_pid2.output() >= 1, "Output must never be 0, even with tiny measurements");
+        assert!(
+            the_pid2.output() >= 1,
+            "Output must never be 0, even with tiny measurements"
+        );
     }
 
     /// 🧪 Verify the PID works with equal desired and max_doc_count.

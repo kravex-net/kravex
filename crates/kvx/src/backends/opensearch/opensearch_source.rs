@@ -212,10 +212,7 @@ impl OpenSearchSource {
 
         // 📊 total_size = 0: unknown until we page through everything.
         // "How many documents?" — "Yes." — OpenSearch, always
-        let progress = ProgressMetrics::new(
-            format!("opensearch://{}", config.index),
-            0,
-        );
+        let progress = ProgressMetrics::new(format!("opensearch://{}", config.index), 0);
 
         Ok(Self {
             client,
@@ -258,8 +255,9 @@ impl OpenSearchSource {
             );
         }
 
-        let response_text = response.text().await
-            .context("💀 PIT response body could not be read. The cluster whispered and we couldn't hear.")?;
+        let response_text = response.text().await.context(
+            "💀 PIT response body could not be read. The cluster whispered and we couldn't hear.",
+        )?;
         let body: Value = serde_json::from_str(&response_text)
             .context("💀 PIT response was not valid JSON. The cluster is speaking in tongues.")?;
 
@@ -281,10 +279,7 @@ impl OpenSearchSource {
     /// The _id and _index are preserved so downstream transforms can build
     /// bulk action lines with proper document identity routing.
     async fn execute_search(&mut self, batch_size: usize) -> Result<(Vec<String>, usize)> {
-        let search_url = format!(
-            "{}/_search",
-            self.config.url.trim_end_matches('/')
-        );
+        let search_url = format!("{}/_search", self.config.url.trim_end_matches('/'));
 
         // 🏗️ Build the search body
         let query = match &self.config.query {
@@ -337,7 +332,9 @@ impl OpenSearchSource {
             );
         }
 
-        let response_text = response.text().await
+        let response_text = response
+            .text()
+            .await
             .context("💀 Search response body could not be read.")?;
         let body: Value = serde_json::from_str(&response_text)
             .context("💀 Search response was not valid JSON. The cluster is having a bad day.")?;
@@ -348,19 +345,20 @@ impl OpenSearchSource {
         }
 
         // 📦 Extract hits
-        let hits = body["hits"]["hits"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("💀 Search response missing hits.hits array. Response: {}", body))?;
+        let hits = body["hits"]["hits"].as_array().ok_or_else(|| {
+            anyhow::anyhow!(
+                "💀 Search response missing hits.hits array. Response: {}",
+                body
+            )
+        })?;
 
         if hits.is_empty() {
             return Ok((Vec::new(), 0));
         }
 
         // 🔄 Update search_after cursor from the last hit's sort values
-        if let Some(last_hit) = hits.last() {
-            if let Some(sort_values) = last_hit["sort"].as_array() {
-                self.search_after = Some(sort_values.clone());
-            }
+        if let Some(sort_values) = hits.last().and_then(|h| h["sort"].as_array()) {
+            self.search_after = Some(sort_values.clone());
         }
 
         // 📄 Build NDJSON lines — each line preserves _id, _index, _source
@@ -483,9 +481,11 @@ mod tests {
     #[test]
     fn the_one_where_query_defaults_to_none_meaning_match_all() {
         let json = r#"{"url": "https://localhost:9200", "index": "test"}"#;
-        let config: OpenSearchSourceConfig = serde_json::from_str(json)
-            .expect("💀 Config deserialization failed.");
-        assert!(config.query.is_none(), "No query = match_all, the firehose approach");
+        let config: OpenSearchSourceConfig =
+            serde_json::from_str(json).expect("💀 Config deserialization failed.");
+        assert!(
+            config.query.is_none(),
+            "No query = match_all, the firehose approach"
+        );
     }
-
 }

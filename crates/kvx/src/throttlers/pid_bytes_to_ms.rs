@@ -41,7 +41,7 @@ use super::ThrottleController;
 /// Generates an output of recommended bytes, based on measured time spans.
 /// The feedback loop: measure duration → compute error → adjust output → repeat.
 ///
-/// 🧠 Gain derivation rationale 
+/// 🧠 Gain derivation rationale
 /// - `proportional_gain`: ratio of output to set_point (or vice versa, whichever is larger).
 ///   This scales correction proportionally to the initial "gap" between our guess and target.
 ///   A 10MB initial output with an 8s set point gives K_p ≈ 1.25 — gentle corrections.
@@ -129,8 +129,8 @@ impl PidControllerBytesToMs {
         // This auto-scales the proportional response based on how "far off" our initial guess is.
         // If output >> set_point (or vice versa), K_p is larger → more aggressive initial correction.
         // If they're close, K_p ≈ 1 → gentle nudges. Elegant, really. Like math always is.
-        let proportional_gain = f64::max(initial_output, set_point_ms)
-            / f64::min(initial_output, set_point_ms);
+        let proportional_gain =
+            f64::max(initial_output, set_point_ms) / f64::min(initial_output, set_point_ms);
 
         // 🧠 Integral gain = K_p / 10. The "slow and steady" correction.
         // Addresses persistent bias without causing oscillation.
@@ -256,9 +256,9 @@ mod tests {
     fn the_one_where_pid_is_born_with_reasonable_defaults() {
         // -- 🧪 Birth of a controller. It has gains. It has dreams. It has no measurements yet.
         let controller = PidControllerBytesToMs::new(
-            8000.0,     // 🎯 Target: 8 seconds per request
-            10_485_760, // 📦 Initial guess: 10MB
-            1_048_576,  // 📏 Floor: 1MB (we won't go smaller than this)
+            8000.0,      // 🎯 Target: 8 seconds per request
+            10_485_760,  // 📦 Initial guess: 10MB
+            1_048_576,   // 📏 Floor: 1MB (we won't go smaller than this)
             104_857_600, // 📏 Ceiling: 100MB (we won't go bigger than this, we're not animals)
         );
 
@@ -406,12 +406,8 @@ mod tests {
     /// 🧪 The one where the EMA smooths oscillations and output variance decreases over time
     #[test]
     fn the_one_where_ema_smooths_noisy_measurements() {
-        let mut controller = PidControllerBytesToMs::new(
-            8000.0,
-            10_485_760,
-            1_048_576,
-            104_857_600,
-        );
+        let mut controller =
+            PidControllerBytesToMs::new(8000.0, 10_485_760, 1_048_576, 104_857_600);
 
         // -- 🧪 Alternate between very fast and very slow.
         // -- EMA smoothing creates an asymmetric lag: the "fast" half (2000ms) briefly pulls EMA

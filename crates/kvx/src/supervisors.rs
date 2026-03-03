@@ -18,7 +18,7 @@ use crate::composers::ComposerBackend;
 use crate::throttlers::{ControllerBackend, ThrottleControllerBackend};
 use crate::transforms::DocumentTransformer;
 use crate::workers::Worker;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 
 /// 📦 The Supervisor: because even async tasks need someone hovering over them
@@ -52,13 +52,18 @@ impl Supervisor {
     /// Each SinkWorker gets its own clone of the `DocumentTransformer` and `ComposerBackend`.
     /// Since transforms and composers are zero-sized structs, cloning is free.
     /// The Composer handles both transformation AND assembly — the Cow lives there. 🐄
+    // 🐛 TODO: bundle transformer/composer/controller/throttle_controllers into a PipelineConfig struct
+    // to reduce arg count. For now, clippy gets a hall pass.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn start_workers(
         &self,
         source_backend: crate::backends::SourceBackend,
         sink_backends: Vec<crate::backends::SinkBackend>,
         transformer: DocumentTransformer,
         composer: ComposerBackend,
-        max_request_size_bytes: usize,
+        // 🐛 TODO: wire this into SinkWorker to enforce max payload size limits.
+        // It's passed from AppConfig but the SinkWorker doesn't use it yet.
+        _max_request_size_bytes: usize,
         controller: ControllerBackend,
         throttle_controllers: Vec<ThrottleControllerBackend>,
         cancellation_token: CancellationToken,
@@ -70,7 +75,9 @@ impl Supervisor {
 
         // 🗑️ Spawn N sink workers, each with its own transformer + composer + throttle controller + cancel token.
         // 🧠 Each controller is owned by its worker — no shared state, no Mutex, no tears. 🔒
-        for (sink_backend, throttle_controller) in sink_backends.into_iter().zip(throttle_controllers) {
+        for (sink_backend, throttle_controller) in
+            sink_backends.into_iter().zip(throttle_controllers)
+        {
             let sink_worker = crate::workers::SinkWorker::new(
                 rx.clone(),
                 sink_backend,

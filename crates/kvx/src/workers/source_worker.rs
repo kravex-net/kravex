@@ -82,7 +82,10 @@ impl SourceWorker {
 impl Worker for SourceWorker {
     fn start(mut self) -> JoinHandle<Result<()>> {
         tokio::spawn(async move {
-            debug!("🚀 SourceWorker started — controller={:?}, pumping pages...", self.controller);
+            debug!(
+                "🚀 SourceWorker started — controller={:?}, pumping pages...",
+                self.controller
+            );
             loop {
                 // 🎛️ Step 1: Ask the controller for the optimal batch size
                 let the_batch_size_hint = self.controller.output();

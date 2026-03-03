@@ -16,7 +16,7 @@ CLI interface for kravex — run migrations from the command line with clap-powe
 - **Config resolution**: TOML base → CLI overrides applied on top
 - **Source of truth**: `kvx::transforms::supported_flows()` → drives `list-flows` output
 - **Drift detection**: test in transforms.rs ensures `supported_flows()` ↔ `from_configs()` parity
-- **Test count**: 9 (kvx-cli crate); 110 total across workspace
+- **Test count**: 9 (kvx-cli crate); 126 total across workspace
 
 # Key Concepts
 
@@ -107,4 +107,5 @@ max_request_size_bytes = 131072
 
 - v0: Placeholder main.rs with raw `std::env::args()` and TOML-only config
 - v1: Full clap CLI rewrite. `list-flows` + `run` subcommands. Flat args with `--source-*`/`--sink-*` prefixes. TOML `--config` backwards compat. InMemory hidden. Claude Code skill. 9 CLI tests.
-- v2 (current — 6-phase refactor): Updated `AppConfig` field names (`source`/`sink` vs old `source_config`/`sink_config`). Throttle config moved to `[throttle.source]`/`[throttle.sink]` TOML sections. CLI throttle override args added. `kvx::stop()` wired to Ctrl+C for graceful shutdown via `CancellationToken`. 110 total tests (101 kvx + 9 kvx-cli).
+- v2 (6-phase refactor): Updated `AppConfig` field names (`source`/`sink` vs old `source_config`/`sink_config`). Throttle config moved to `[throttle.source]`/`[throttle.sink]` TOML sections. CLI throttle override args added. `kvx::stop()` wired to Ctrl+C for graceful shutdown via `CancellationToken`. 110 total tests (101 kvx + 9 kvx-cli).
+- v3 (current — code review hardening): `Commands::Run(Box<RunArgs>)` to fix large_enum_variant (456 byte disparity). Blanket `#![allow]` removed. 126 total tests (117 kvx + 9 kvx-cli).

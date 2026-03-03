@@ -7,20 +7,19 @@
 //!
 //! ⚠️ "The singularity will happen before this crate reaches 1.0"
 
-// -- 🗑️ TODO: clean up the dedz (dead code, not the grateful kind)
-#![allow(dead_code, unused_variables, unused_imports)]
+// -- 🗑️ The blanket allow has been lifted. The compiler sees all now. 👁️
 pub mod app_config;
 pub mod backends;
 pub(crate) mod composers;
-pub(crate) mod throttlers;
 pub(crate) mod progress;
 mod supervisors;
+pub(crate) mod throttlers;
 pub mod transforms;
 pub(crate) mod workers;
 use crate::app_config::AppConfig;
-use crate::throttlers::{ControllerBackend, ThrottleControllerBackend};
-use crate::supervisors::Supervisor;
 use crate::composers::ComposerBackend;
+use crate::supervisors::Supervisor;
+use crate::throttlers::{ControllerBackend, ThrottleControllerBackend};
 use crate::transforms::DocumentTransformer;
 use anyhow::{Context, Result};
 use std::sync::OnceLock;
@@ -46,7 +45,8 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
 
     // -- 🏗️ Build the backends from config — five flavors of source, four flavors of sink.
     // -- Like a search engine buffet, except you can't come back for seconds. Or can you? 🔄
-    let source_backend = app_config.source
+    let source_backend = app_config
+        .source
         .build_backend(&app_config.throttle.source)
         .await
         .context("Failed to create source backend")?;
@@ -55,7 +55,8 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     let mut sink_backends = Vec::with_capacity(sink_parallelism);
     for _ in 0..sink_parallelism {
         sink_backends.push(
-            app_config.sink
+            app_config
+                .sink
                 .build_backend()
                 .await
                 .context("Failed to create sink backend")?,
@@ -65,8 +66,7 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     // 🔄 Resolve the transform from source/sink config pair.
     // 🧠 Knowledge graph: DocumentTransformer::from_configs() matches (source, sink) → transform.
     // File→ES = RallyS3ToEs, File→File = Passthrough, InMemory→InMemory = Passthrough, etc.
-    let transformer =
-        DocumentTransformer::from_configs(&app_config.source, &app_config.sink);
+    let transformer = DocumentTransformer::from_configs(&app_config.source, &app_config.sink);
 
     // 🎼 Resolve the composer from sink config.
     // 🧠 ES/File → NdjsonComposer, InMemory → JsonArrayComposer.
@@ -78,7 +78,8 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     // 🧠 Knowledge graph: SinkThrottleConfig → ThrottleControllerBackend::from_config()
     //   Static → fixed bytes (the OG). Pid → PidControllerBytesToMs (the secret sauce, LICENSE-EE) 🔒
     let max_request_size_bytes = app_config.throttle.sink.max_request_size_bytes;
-    let the_prototype_controller = ThrottleControllerBackend::from_config(&app_config.throttle.sink);
+    let the_prototype_controller =
+        ThrottleControllerBackend::from_config(&app_config.throttle.sink);
     let throttle_controllers: Vec<_> = (0..sink_parallelism)
         .map(|_| the_prototype_controller.clone())
         .collect();
@@ -88,8 +89,10 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     // PidBytesToDocCount = adaptive feedback-driven batch sizing (the fancy one).
     // 🧠 Knowledge graph: controller lives in SourceWorker, feeds output to source.pump(hint).
     let the_default_page_size = app_config.throttle.source.max_batch_size_docs;
-    let the_controller =
-        ControllerBackend::from_config(&app_config.throttle.source.controller, the_default_page_size);
+    let the_controller = ControllerBackend::from_config(
+        &app_config.throttle.source.controller,
+        the_default_page_size,
+    );
 
     let supervisor = Supervisor::new(app_config.clone());
     supervisor
@@ -169,17 +172,16 @@ mod tests {
         let sink = SinkBackend::InMemory(sink_inner.clone());
 
         // 🔄 InMemory→InMemory resolves to Passthrough transform
-        let transformer = DocumentTransformer::from_configs(
-            &app_config.source,
-            &app_config.sink,
-        );
+        let transformer = DocumentTransformer::from_configs(&app_config.source, &app_config.sink);
 
         // 🎼 InMemory sink → JsonArrayComposer: [item,item,...]
         let composer = ComposerBackend::from_sink_config(&app_config.sink);
 
         // 🧠 Build a static throttle controller for the test — InMemory doesn't need PID
         let max_request_size_bytes = app_config.throttle.sink.max_request_size_bytes;
-        let throttle_controllers = vec![ThrottleControllerBackend::new_static(max_request_size_bytes)];
+        let throttle_controllers = vec![ThrottleControllerBackend::new_static(
+            max_request_size_bytes,
+        )];
 
         // 🎛️ Static controller for testing — no PID, just the configured batch size
         let the_controller = ControllerBackend::from_config(
@@ -190,7 +192,16 @@ mod tests {
         let the_cancellation_token = CancellationToken::new();
         let supervisor = Supervisor::new(app_config);
         supervisor
-            .start_workers(source, vec![sink], transformer, composer, max_request_size_bytes, the_controller, throttle_controllers, the_cancellation_token)
+            .start_workers(
+                source,
+                vec![sink],
+                transformer,
+                composer,
+                max_request_size_bytes,
+                the_controller,
+                throttle_controllers,
+                the_cancellation_token,
+            )
             .await?;
 
         // 📦 SinkWorker received 1 page (4 docs newline-delimited), passthrough composed into JSON array.
@@ -203,7 +214,13 @@ mod tests {
         // 📄 Passthrough returns the whole page as one item, so JSON array wraps the entire page
         let expected = format!(
             "[{}]",
-            [r#"{"doc":1}"#, r#"{"doc":2}"#, r#"{"doc":3}"#, r#"{"doc":4}"#].join("\n")
+            [
+                r#"{"doc":1}"#,
+                r#"{"doc":2}"#,
+                r#"{"doc":3}"#,
+                r#"{"doc":4}"#
+            ]
+            .join("\n")
         );
         assert_eq!(
             the_payload, &expected,

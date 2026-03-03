@@ -78,9 +78,7 @@ impl Transform for RallyS3ToEs {
         raw_source_page
             .split('\n')
             .filter(|line| !line.trim().is_empty())
-            .map(|line| {
-                transform_single_rally_doc(line).map(Cow::Owned)
-            })
+            .map(|line| transform_single_rally_doc(line).map(Cow::Owned))
             .collect()
     }
 }
@@ -217,7 +215,10 @@ mod tests {
         let the_source: serde_json::Value = serde_json::from_str(the_lines[1])?;
         assert!(the_source.get("_rallyAPIMajor").is_none());
         assert!(the_source.get("_ref").is_none());
-        assert_eq!(the_source["Name"], "As a user, I want to migrate data without crying");
+        assert_eq!(
+            the_source["Name"],
+            "As a user, I want to migrate data without crying"
+        );
         assert_eq!(the_source["_type"], "HierarchicalRequirement");
 
         Ok(())
@@ -275,7 +276,10 @@ mod tests {
         let the_items = RallyS3ToEs.transform(&page)?;
         let the_source: serde_json::Value =
             serde_json::from_str(the_items[0].as_ref().split('\n').nth(1).unwrap())?;
-        assert!(the_source.get("_rallyAPIMajor").is_none(), "Top-level stripped");
+        assert!(
+            the_source.get("_rallyAPIMajor").is_none(),
+            "Top-level stripped"
+        );
         assert!(the_source["Project"]["_ref"].is_string(), "Nested survives");
         Ok(())
     }
@@ -301,12 +305,17 @@ mod tests {
     #[test]
     fn the_one_where_empty_lines_in_page_are_skipped() -> Result<()> {
         // 🧪 Pages may have trailing newlines or blank lines — they should be ignored
-        let page = format!("{}\n\n{}\n",
+        let page = format!(
+            "{}\n\n{}\n",
             serde_json::json!({"ObjectID": 1}),
             serde_json::json!({"ObjectID": 2})
         );
         let the_items = RallyS3ToEs.transform(&page)?;
-        assert_eq!(the_items.len(), 2, "Empty lines skipped, two real docs survive");
+        assert_eq!(
+            the_items.len(),
+            2,
+            "Empty lines skipped, two real docs survive"
+        );
         Ok(())
     }
 }

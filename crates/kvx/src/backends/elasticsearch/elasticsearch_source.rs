@@ -187,7 +187,11 @@ impl ElasticsearchSource {
         info!(
             "🚀 Elasticsearch source initialized — target: {}{}",
             config.url,
-            config.index.as_deref().map(|i| format!("/{}", i)).unwrap_or_default()
+            config
+                .index
+                .as_deref()
+                .map(|i| format!("/{}", i))
+                .unwrap_or_default()
         );
 
         let progress = ProgressMetrics::new(config.url.clone(), 0);
@@ -238,7 +242,9 @@ impl ElasticsearchSource {
             );
         }
 
-        let response_text = response.text().await
+        let response_text = response
+            .text()
+            .await
             .context("💀 PIT response body could not be read.")?;
         let body: Value = serde_json::from_str(&response_text)
             .context("💀 PIT response was not valid JSON. The cluster is in a mood.")?;
@@ -257,16 +263,12 @@ impl ElasticsearchSource {
     ///
     /// Returns: (Vec<String>, usize) — (NDJSON lines per hit, total bytes)
     async fn execute_search(&mut self, batch_size: usize) -> Result<(Vec<String>, usize)> {
-        let search_url = format!(
-            "{}/_search",
-            self.config.url.trim_end_matches('/')
-        );
+        let search_url = format!("{}/_search", self.config.url.trim_end_matches('/'));
 
         // 🏗️ Build the search body
         let query = match &self.config.query {
-            Some(q) => serde_json::from_str(q).context(
-                "💀 The query filter is not valid JSON. Check your syntax.",
-            )?,
+            Some(q) => serde_json::from_str(q)
+                .context("💀 The query filter is not valid JSON. Check your syntax.")?,
             None => serde_json::json!({"match_all": {}}),
         };
 
@@ -290,8 +292,8 @@ impl ElasticsearchSource {
             search_body["search_after"] = Value::Array(cursor.clone());
         }
 
-        let search_body_str = serde_json::to_string(&search_body)
-            .context("💀 Failed to serialize search body.")?;
+        let search_body_str =
+            serde_json::to_string(&search_body).context("💀 Failed to serialize search body.")?;
 
         let mut request = self
             .client
@@ -313,7 +315,9 @@ impl ElasticsearchSource {
             );
         }
 
-        let response_text = response.text().await
+        let response_text = response
+            .text()
+            .await
             .context("💀 Search response body could not be read.")?;
         let body: Value = serde_json::from_str(&response_text)
             .context("💀 Search response was not valid JSON.")?;
@@ -333,10 +337,8 @@ impl ElasticsearchSource {
         }
 
         // 🔄 Update search_after cursor
-        if let Some(last_hit) = hits.last() {
-            if let Some(sort_values) = last_hit["sort"].as_array() {
-                self.search_after = Some(sort_values.clone());
-            }
+        if let Some(sort_values) = hits.last().and_then(|h| h["sort"].as_array()) {
+            self.search_after = Some(sort_values.clone());
         }
 
         // 📄 Build NDJSON lines — preserves _id, _index, _source
@@ -349,9 +351,8 @@ impl ElasticsearchSource {
                 "_index": hit["_index"],
                 "_source": hit["_source"]
             });
-            let line = serde_json::to_string(&hit_line).context(
-                "💀 Failed to serialize hit. The irony is not lost on us.",
-            )?;
+            let line = serde_json::to_string(&hit_line)
+                .context("💀 Failed to serialize hit. The irony is not lost on us.")?;
             total_bytes += line.len();
             lines.push(line);
         }
@@ -389,7 +390,10 @@ impl ElasticsearchSource {
                     debug!("🗑️ ES PIT deleted — snapshot released, the stub is avenged");
                 }
                 Ok(resp) => {
-                    debug!("⚠️ ES PIT deletion returned {}: not critical, it'll expire", resp.status());
+                    debug!(
+                        "⚠️ ES PIT deletion returned {}: not critical, it'll expire",
+                        resp.status()
+                    );
                 }
                 Err(e) => {
                     debug!("⚠️ ES PIT deletion failed: {}. It'll expire naturally.", e);
@@ -417,5 +421,63 @@ fn apply_auth(
     } else {
         // -- 🚶 No auth? Walking into an ES cluster with no credentials is a power move.
         request
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 🧪 ElasticsearchSourceConfig deserializes with all fields populated.
+    /// "You complete me." — Jerry Maguire to his fully hydrated config struct 🦆
+    #[test]
+    fn the_one_where_es_source_config_has_all_the_fields() {
+        // -- 📡 Every field filled — the overachieving config. Dean's list material.
+        let config = ElasticsearchSourceConfig {
+            url: "https://localhost:9200".to_string(),
+            index: Some("my-index".to_string()),
+            username: Some("elastic".to_string()),
+            password: Some("changeme".to_string()),
+            api_key: None,
+            query: Some(r#"{"term":{"status":"active"}}"#.to_string()),
+        };
+        assert_eq!(config.index, Some("my-index".to_string()));
+        assert!(config.query.is_some());
+    }
+
+    /// 🧪 Query defaults to None (match_all) — the "select * from everything" approach.
+    #[test]
+    fn the_one_where_query_defaults_to_none_meaning_match_all() {
+        // -- 📡 No query = match_all. The firehose. The "just give me everything" approach.
+        let json = r#"{"url": "https://localhost:9200"}"#;
+        let config: ElasticsearchSourceConfig = serde_json::from_str(json)
+            .expect("💀 Config deserialization failed. But the JSON was handcrafted with love.");
+        assert!(
+            config.query.is_none(),
+            "No query = match_all, the firehose approach"
+        );
+    }
+
+    /// 🧪 Optional auth fields default correctly.
+    /// "No auth? In THIS economy?" — every security engineer 🔒
+    #[test]
+    fn the_one_where_auth_fields_are_optional() {
+        // -- 🔒 No auth config at all. Just a bare URL and an index. Living dangerously.
+        let json = r#"{"url": "https://localhost:9200"}"#;
+        let config: ElasticsearchSourceConfig =
+            serde_json::from_str(json).expect("💀 Failed to deserialize. The JSON was one field.");
+        assert!(config.username.is_none());
+        assert!(config.password.is_none());
+        assert!(config.api_key.is_none());
+    }
+
+    /// 🧪 Index is optional for source config (defaults to None).
+    #[test]
+    fn the_one_where_index_is_optional_because_sometimes_you_just_dont_know() {
+        // -- 🎯 No index specified. The source will figure it out. Probably. Maybe.
+        let json = r#"{"url": "https://localhost:9200"}"#;
+        let config: ElasticsearchSourceConfig =
+            serde_json::from_str(json).expect("💀 Config deserialization failed.");
+        assert!(config.index.is_none());
     }
 }

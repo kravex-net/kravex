@@ -25,7 +25,7 @@
 //!
 //! ⚠️ The singularity will compose its own payloads. Until then, we have this module.
 
-use crate::transforms::{DocumentTransformer, Transform};
+use crate::transforms::DocumentTransformer;
 use anyhow::Result;
 
 pub(crate) mod backend;

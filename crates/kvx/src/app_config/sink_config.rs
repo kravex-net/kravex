@@ -12,11 +12,11 @@
 use anyhow::Result;
 use serde::Deserialize;
 
+use crate::backends::SinkBackend;
 use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSinkConfig};
 use crate::backends::file::{FileSink, FileSinkConfig};
 use crate::backends::in_mem::InMemorySink;
 use crate::backends::opensearch::{OpenSearchSink, OpenSearchSinkConfig};
-use crate::backends::SinkBackend;
 
 /// 🗑️ SinkConfig: same vibe as SourceConfig but for the *receiving* end.
 /// Data goes IN. Data does not come back out. It is not a revolving door.

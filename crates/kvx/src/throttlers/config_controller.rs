@@ -107,16 +107,32 @@ mod tests {
         assert_eq!(the_controller.output(), 1000, "Zero bytes — still 1000");
 
         the_controller.measure(999_999_999.0);
-        assert_eq!(the_controller.output(), 1000, "Nearly a gigabyte — still 1000");
+        assert_eq!(
+            the_controller.output(),
+            1000,
+            "Nearly a gigabyte — still 1000"
+        );
 
         the_controller.measure(-42.0);
-        assert_eq!(the_controller.output(), 1000, "Negative bytes (?) — still 1000");
+        assert_eq!(
+            the_controller.output(),
+            1000,
+            "Negative bytes (?) — still 1000"
+        );
 
         the_controller.measure(f64::INFINITY);
-        assert_eq!(the_controller.output(), 1000, "Infinity — still 1000. Zen. 🧘");
+        assert_eq!(
+            the_controller.output(),
+            1000,
+            "Infinity — still 1000. Zen. 🧘"
+        );
 
         the_controller.measure(f64::NAN);
-        assert_eq!(the_controller.output(), 1000, "NaN — still 1000. Nothing phases us.");
+        assert_eq!(
+            the_controller.output(),
+            1000,
+            "NaN — still 1000. Nothing phases us."
+        );
     }
 
     /// 🧪 Verify multiple calls to output() are consistent.

@@ -7,20 +7,20 @@
 //! 🏗️ Powered by Figment, because manually parsing env vars is a form of
 //! self-harm that even the borrow checker wouldn't approve of.
 
-pub mod source_config;
 pub mod sink_config;
+pub mod source_config;
 
 // 🔌 Re-export SourceConfig and SinkConfig so callers do `app_config::SourceConfig`
 // instead of `app_config::source_config::SourceConfig`. Convenience is a feature. 🦆
-pub use source_config::SourceConfig;
 pub use sink_config::SinkConfig;
+pub use source_config::SourceConfig;
 
 use anyhow::Context;
 use serde::Deserialize;
 // 🔌 Re-export throttle config types so kvx-cli can access them cross-crate.
 // The throttlers module is pub(crate), but these types live in AppConfig's pub fields.
 // Without re-export, the CLI would be like a tourist with a map in a language they can't read. 🗺️🦆
-pub use crate::throttlers::{ThrottleAppConfig, SourceThrottleConfig, SinkThrottleConfig};
+pub use crate::throttlers::{SinkThrottleConfig, SourceThrottleConfig, ThrottleAppConfig};
 use figment::{
     Figment,
     providers::{Env, Format, Toml},
@@ -109,8 +109,8 @@ pub struct AppConfig {
 /// 📐 DESIGN NOTE (no cap, this is tribal knowledge):
 ///   - If `config_file_name` is None  → env vars only. No file. No assumptions. No pizza defaults.
 ///   - If `config_file_name` is Some  → env vars + TOML file, merged. TOML wins on conflicts.
-///   Previously kravex always fell back to "config.toml" — like assuming everyone wants pineapple
-///   on their pizza. We fixed that. ethos showed us the light.
+///     Previously kravex always fell back to "config.toml" — like assuming everyone wants pineapple
+///     on their pizza. We fixed that. ethos showed us the light.
 ///
 /// 💀 Returns an error if config is unparseable. Which it will be. Check the error message though —
 /// it's contextual, informative, and written with love. Or despair. Hard to tell at 3am.
@@ -119,7 +119,7 @@ pub fn load_config(config_file_name: Option<&Path>) -> anyhow::Result<AppConfig>
     // -- of every 3am incident. "The config loaded fine." — famous last words.
     info!(
         "🔧 Loading configuration: {:#?}",
-        config_file_name.unwrap_or(&Path::new(""))
+        config_file_name.unwrap_or(Path::new(""))
     );
 
     // -- 🏗️ Start with env vars as the base layer — like a good sourdough starter.
@@ -200,10 +200,14 @@ mod tests {
         assert_eq!(app_config.runtime.sink_parallelism, 3);
         // 🧠 max_request_size_bytes now lives in throttle.sink, not in the backend config.
         // Backends are pure connection config now. The commune is working. 🏠
-        assert!(matches!(app_config.sink, SinkConfig::File(_)),
-            "💀 Expected File sink config, but serde detoured us. Plot twist energy.");
-        assert_eq!(app_config.throttle.sink.max_request_size_bytes, 123456,
-            "💀 max_request_size_bytes should be 123456 — chosen by dice roll and vibes");
+        assert!(
+            matches!(app_config.sink, SinkConfig::File(_)),
+            "💀 Expected File sink config, but serde detoured us. Plot twist energy."
+        );
+        assert_eq!(
+            app_config.throttle.sink.max_request_size_bytes, 123456,
+            "💀 max_request_size_bytes should be 123456 — chosen by dice roll and vibes"
+        );
 
         fs::remove_file(config_path)
             .expect("💀 Failed to remove test config. Even the trash has trust issues.");
@@ -286,7 +290,10 @@ mod tests {
                 );
                 assert_eq!(s3_cfg.bucket, "my-rally-bucket");
                 assert_eq!(s3_cfg.region, "us-west-2");
-                assert!(s3_cfg.key.is_none(), "Key should default to None when not specified");
+                assert!(
+                    s3_cfg.key.is_none(),
+                    "Key should default to None when not specified"
+                );
             }
             honestly_who_knows => panic!(
                 "💀 Expected S3Rally source config, but got {:?}. Plot twist energy. 🎭",
@@ -319,7 +326,10 @@ mod tests {
         match &app_config.source {
             SourceConfig::S3Rally(s3_cfg) => {
                 assert_eq!(s3_cfg.key, Some("custom/path/data.json".to_string()));
-                assert_eq!(s3_cfg.region, "us-east-1", "Region should default to us-east-1");
+                assert_eq!(
+                    s3_cfg.region, "us-east-1",
+                    "Region should default to us-east-1"
+                );
             }
             honestly_who_knows => panic!(
                 "💀 Expected S3Rally, got {:?}. The config took a wrong turn at Albuquerque.",

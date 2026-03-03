@@ -214,9 +214,7 @@ impl S3RallySourceConfig {
     /// "Timeout exceeded: We waited for the key. And waited. Like a dog at the window.
     /// But the key was in the config all along."
     pub fn resolved_key(&self) -> String {
-        self.key
-            .clone()
-            .unwrap_or_else(|| self.track.default_key())
+        self.key.clone().unwrap_or_else(|| self.track.default_key())
     }
 }
 
@@ -372,10 +370,7 @@ impl S3RallySource {
         let the_buf_reader = io::BufReader::new(the_boxed_reader);
 
         // 📊 Progress metrics — source label is the S3 URI for display in the TUI.
-        let the_source_label = format!(
-            "s3://{}/{}",
-            source_config.bucket, the_resolved_key
-        );
+        let the_source_label = format!("s3://{}/{}", source_config.bucket, the_resolved_key);
         let the_progress = ProgressMetrics::new(the_source_label, the_content_length_u64);
 
         Ok(Self {
@@ -408,9 +403,7 @@ impl Source for S3RallySource {
     async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<String>> {
         // 🎛️ Apply the controller's batch size hint — merged from the old set_page_size_hint()
         self.max_batch_size_docs = doc_count_hint;
-        let mut page = String::with_capacity(
-            self.max_batch_size_bytes,
-        );
+        let mut page = String::with_capacity(self.max_batch_size_bytes);
         let mut total_bytes_read = 0usize;
         let mut line_count = 0usize;
         // ⚠️ 1MB initial capacity per line — because Rally JSON documents can be CHONKY.
@@ -448,8 +441,7 @@ impl Source for S3RallySource {
 
         trace!(
             "🪣 hauled {} bytes from S3 like a digital bucket brigade — {}🧵 lines in this page",
-            total_bytes_read,
-            line_count
+            total_bytes_read, line_count
         );
         self.progress
             .update(total_bytes_read as u64, line_count as u64);
@@ -502,15 +494,14 @@ mod tests {
         ];
 
         for (the_json_str, the_expected_variant) in the_track_names_and_their_destiny {
-            let the_deserialized: RallyTrack = serde_json::from_str(the_json_str).unwrap_or_else(
-                |e| {
+            let the_deserialized: RallyTrack =
+                serde_json::from_str(the_json_str).unwrap_or_else(|e| {
                     panic!(
                         "💀 Failed to deserialize track '{}': {}. \
                      The serde gods are displeased. Check your rename_all.",
                         the_json_str, e
                     )
-                },
-            );
+                });
             assert_eq!(
                 the_deserialized, the_expected_variant,
                 "Track '{}' should deserialize to {:?}",
@@ -539,15 +530,14 @@ mod tests {
             let the_str = track.as_str();
             // 🔄 Round-trip: as_str → serde deserialize → should give same variant
             let the_json = format!("\"{}\"", the_str);
-            let the_roundtripped: RallyTrack = serde_json::from_str(&the_json).unwrap_or_else(
-                |e| {
+            let the_roundtripped: RallyTrack =
+                serde_json::from_str(&the_json).unwrap_or_else(|e| {
                     panic!(
                         "💀 as_str() returned '{}' for {:?} but serde can't parse it back: {}. \
                      The round-trip is broken. Fix as_str() or the serde rename.",
                         the_str, track, e
                     )
-                },
-            );
+                });
             assert_eq!(
                 the_roundtripped, track,
                 "Round-trip failed for {:?} — as_str() returned '{}'",
@@ -615,8 +605,9 @@ mod tests {
             "region": "us-west-2"
         }"#;
 
-        let the_config: S3RallySourceConfig = serde_json::from_str(the_config_json)
-            .expect("💀 Config deserialization failed. The JSON was valid. The struct was not amused.");
+        let the_config: S3RallySourceConfig = serde_json::from_str(the_config_json).expect(
+            "💀 Config deserialization failed. The JSON was valid. The struct was not amused.",
+        );
 
         assert_eq!(the_config.track, RallyTrack::Geonames);
         assert_eq!(the_config.bucket, "my-rally-bucket");

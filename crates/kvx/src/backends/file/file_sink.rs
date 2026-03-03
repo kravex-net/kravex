@@ -13,12 +13,11 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use tokio::{
     fs::File,
-    io::{self, AsyncBufReadExt, AsyncWriteExt},
+    io::{self, AsyncWriteExt},
 };
 use tracing::trace;
 
-use crate::backends::{Sink, Source};
-use crate::progress::ProgressMetrics;
+use crate::backends::Sink;
 // -- 🚰 FileSinkConfig — cousin of FileSourceConfig, equally traumatized by disk full errors.
 // -- Also lives here, cozy next to its FileSink bestie. No more long-distance config relationships.
 // KNOWLEDGE GRAPH: same co-location principle as above. One backend = one config = one file. Clean.
@@ -114,5 +113,42 @@ impl Sink for FileSink {
             like a hoarder who finally agreed to let go, only for the storage unit to be locked. \
             The bytes are still in memory. The disk remains unwritten. The migration weeps.",
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 🧪 FileSinkConfig holds the filename. That's it. That's the test.
+    /// "Simplicity is the ultimate sophistication." — Leonardo da Vinci, who never wrote Rust 🦆
+    #[test]
+    fn the_one_where_sink_config_is_just_a_filename() {
+        // -- 📂 The simplest config. A filename. That's the whole personality.
+        let config = FileSinkConfig {
+            file_name: "output.ndjson".to_string(),
+        };
+        assert_eq!(config.file_name, "output.ndjson");
+    }
+
+    /// 🧪 FileSinkConfig deserializes from JSON like a good serde citizen.
+    #[test]
+    fn the_one_where_sink_config_deserializes_from_json() {
+        // -- 📡 JSON → struct. The eternal ritual. The serde dance.
+        let json = r#"{"file_name": "/tmp/kravex-output.ndjson"}"#;
+        let config: FileSinkConfig = serde_json::from_str(json)
+            .expect("💀 FileSinkConfig deserialization failed. It's ONE field. One.");
+        assert_eq!(config.file_name, "/tmp/kravex-output.ndjson");
+    }
+
+    /// 🧪 FileSinkConfig clones correctly — because Clone is the love language of Rust.
+    #[test]
+    fn the_one_where_sink_config_clones_without_drama() {
+        // -- 🧬 Clone test — proving that copies are faithful reproductions, unlike fax machines 🦆
+        let original = FileSinkConfig {
+            file_name: "original.ndjson".to_string(),
+        };
+        let the_clone = original.clone();
+        assert_eq!(original.file_name, the_clone.file_name);
     }
 }

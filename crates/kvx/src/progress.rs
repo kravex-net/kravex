@@ -40,7 +40,7 @@ fn format_number(n: u64) -> String {
     // -- 🧵 pre-allocate like we know what we're doing (we do, we read the book)
     let mut result = String::with_capacity(s.len() + s.len() / 3);
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             result.push(',');
         }
         result.push(c);
@@ -308,5 +308,45 @@ impl ProgressMetrics {
         // indicatif will handle the terminal magic (cursor positioning, redraw, etc.)
         self.progress_bar
             .set_message(format!("source: {}\n{}", self.source_name, table));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 🧪 format_number adds commas to large numbers like a civilized society.
+    /// "A number without commas is like a sentence without spaces" — Typography Monthly 🦆
+    #[test]
+    fn the_one_where_format_number_handles_the_classics() {
+        // -- 🔢 The greatest hits of number formatting. Billboard Top 10.
+        assert_eq!(format_number(0), "0");
+        assert_eq!(format_number(1), "1");
+        assert_eq!(format_number(999), "999");
+        assert_eq!(format_number(1_000), "1,000");
+        assert_eq!(format_number(1_000_000), "1,000,000");
+        assert_eq!(format_number(1_234_567_890), "1,234,567,890");
+    }
+
+    /// 🧪 format_number handles the awkward middle children of number formatting.
+    #[test]
+    fn the_one_where_format_number_handles_edge_cases() {
+        // -- 🎯 Edge cases: the numbers that sit in the corner at parties
+        assert_eq!(format_number(10), "10");
+        assert_eq!(format_number(100), "100");
+        assert_eq!(format_number(10_000), "10,000");
+        assert_eq!(format_number(100_000), "100,000");
+    }
+
+    /// 🧪 format_number handles u64::MAX — because go big or go home. 🚀
+    #[test]
+    fn the_one_where_format_number_goes_to_the_max() {
+        // -- 🏔️ u64::MAX: 18,446,744,073,709,551,615 — the Everest of unsigned integers
+        let formatted = format_number(u64::MAX);
+        assert!(
+            formatted.contains(','),
+            "u64::MAX should have commas — it's 20 digits, not a phone number"
+        );
+        assert_eq!(formatted, "18,446,744,073,709,551,615");
     }
 }

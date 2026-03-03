@@ -200,7 +200,11 @@ mod tests {
 
         let the_output = the_items[0].as_ref();
         let the_lines: Vec<&str> = the_output.split('\n').collect();
-        assert_eq!(the_lines.len(), 2, "Bulk format = exactly two lines, always");
+        assert_eq!(
+            the_lines.len(),
+            2,
+            "Bulk format = exactly two lines, always"
+        );
 
         // 📋 Action line: {"index":{"_id":"doc-001"}}
         let the_action: Value = serde_json::from_str(the_lines[0])?;
@@ -208,7 +212,10 @@ mod tests {
 
         // 📦 Source line: the document body (no _id, no _index, just data)
         let the_source: Value = serde_json::from_str(the_lines[1])?;
-        assert_eq!(the_source["title"], "The Great Gatsby but for Search Engines");
+        assert_eq!(
+            the_source["title"],
+            "The Great Gatsby but for Search Engines"
+        );
         assert_eq!(the_source["status"], "migrating");
         // 🎯 _id and _index should NOT appear in the source line
         assert!(the_source.get("_id").is_none());
@@ -324,7 +331,11 @@ mod tests {
             serde_json::json!({"_id": "b", "_index": "idx", "_source": {"n": 2}})
         );
         let the_items = EsHitToBulk.transform(&page)?;
-        assert_eq!(the_items.len(), 2, "Empty lines skipped, two real hits survive");
+        assert_eq!(
+            the_items.len(),
+            2,
+            "Empty lines skipped, two real hits survive"
+        );
         Ok(())
     }
 

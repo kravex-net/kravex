@@ -49,7 +49,7 @@ pub trait Sink: std::fmt::Debug {
 /// keeping the supervisor blissfully ignorant of where data actually lands.
 /// Ignorance is a feature. It's called "abstraction." We put it in AGENTS.md.
 #[derive(Debug)]
-pub enum SinkBackend {
+pub(crate) enum SinkBackend {
     InMemory(in_mem::InMemorySink),
     File(file::FileSink),
     Elasticsearch(elasticsearch::ElasticsearchSink),

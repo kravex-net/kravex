@@ -68,8 +68,6 @@ pub struct OpenSearchSinkConfig {
     // in the workspace (used by S3Rally). SigV4 signing would happen in
     // `apply_auth()` before each HTTP request.
     // Tracking: [future story — AWS SigV4 for managed OpenSearch Service]
-
-
 }
 
 /// 📡 The sink side of the OpenSearch backend — pure I/O, zero buffering.
@@ -116,7 +114,9 @@ impl Sink for OpenSearchSink {
     /// Close is a no-op. The HTTP client drops cleanly. The connection pool waves goodbye.
     /// "He who closes an OpenSearch sink, releases only HTTP connections and memories." 🦆
     async fn close(&mut self) -> Result<()> {
-        debug!("🗑️ OpenSearch sink closing — no buffer to flush, just open-source vibes to release");
+        debug!(
+            "🗑️ OpenSearch sink closing — no buffer to flush, just open-source vibes to release"
+        );
         Ok(())
     }
 }
@@ -199,10 +199,7 @@ impl OpenSearchSink {
     async fn submit_bulk_request(&self, request_body: String) -> Result<()> {
         // 📡 Build the bulk endpoint URL. The `_bulk` API: OpenSearch's loading dock.
         // NDJSON only — same format as Elasticsearch. The fork preserved the sacred wire format.
-        let bulk_url = format!(
-            "{}/_bulk",
-            self.sink_config.url.trim_end_matches('/')
-        );
+        let bulk_url = format!("{}/_bulk", self.sink_config.url.trim_end_matches('/'));
         let mut request = self
             .client
             .post(&bulk_url)
@@ -333,5 +330,4 @@ mod tests {
         assert!(config.username.is_none());
         assert!(config.api_key.is_none());
     }
-
 }

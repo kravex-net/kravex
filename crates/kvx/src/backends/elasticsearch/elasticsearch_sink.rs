@@ -250,3 +250,52 @@ impl ElasticsearchSink {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 🧪 ElasticsearchSinkConfig deserializes with all fields populated.
+    /// "Trust no one. Not even your own config." — Fox Mulder, if he wrote Rust 🦆
+    #[test]
+    fn the_one_where_es_sink_config_has_all_the_fields() {
+        // -- 🔧 Full config, no defaults, no mercy. Like ordering at a restaurant with zero substitutions.
+        let config = ElasticsearchSinkConfig {
+            url: "https://localhost:9200".to_string(),
+            username: Some("elastic".to_string()),
+            password: Some("changeme".to_string()),
+            api_key: None,
+            index: Some("my-index".to_string()),
+        };
+        assert_eq!(config.url, "https://localhost:9200");
+        assert_eq!(config.index, Some("my-index".to_string()));
+    }
+
+    /// 🧪 Optional fields default to None — serde's version of "I didn't bring anything to the potluck."
+    #[test]
+    fn the_one_where_optional_fields_default_to_none() {
+        // -- 📡 Minimal JSON — just a URL, living its best minimalist life 🧘
+        let json = r#"{"url": "https://localhost:9200"}"#;
+        let config: ElasticsearchSinkConfig = serde_json::from_str(json).expect(
+            "💀 Failed to deserialize ElasticsearchSinkConfig. The JSON was literally two fields.",
+        );
+        assert!(config.username.is_none());
+        assert!(config.password.is_none());
+        assert!(config.api_key.is_none());
+    }
+
+    /// 🧪 API key and basic auth are both optional — anonymous access is valid (in dev, hopefully only dev).
+    #[test]
+    fn the_one_where_auth_is_entirely_optional_for_dev_clusters() {
+        // -- 🔒 No auth. The cluster is wide open. "Come in, come in!" — the cluster, probably 🦆
+        let config = ElasticsearchSinkConfig {
+            url: "http://localhost:9200".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            index: None,
+        };
+        assert!(config.username.is_none());
+        assert!(config.api_key.is_none());
+    }
+}

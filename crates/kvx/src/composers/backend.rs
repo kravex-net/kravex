@@ -125,10 +125,7 @@ mod tests {
     fn backend_the_one_where_compose_dispatches_correctly() -> Result<()> {
         // 🧪 ComposerBackend dispatches to the right concrete composer
         let composer = ComposerBackend::from_sink_config(&SinkConfig::InMemory(()));
-        let pages = vec![
-            String::from(r#"{"a":1}"#),
-            String::from(r#"{"b":2}"#),
-        ];
+        let pages = vec![String::from(r#"{"a":1}"#), String::from(r#"{"b":2}"#)];
         let result = composer.compose(&pages, &passthrough_transformer())?;
         assert_eq!(result, r#"[{"a":1},{"b":2}]"#);
         Ok(())

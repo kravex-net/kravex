@@ -13,11 +13,11 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use tokio::{
     fs::File,
-    io::{self, AsyncBufReadExt, AsyncWriteExt},
+    io::{self, AsyncBufReadExt},
 };
 use tracing::trace;
 
-use crate::backends::{Sink, Source};
+use crate::backends::Source;
 use crate::progress::ProgressMetrics;
 
 // -- 📂 FileSourceConfig — "It's just a file", said no sysadmin ever before the disk filled up.
@@ -189,5 +189,46 @@ impl Source for FileSource {
         } else {
             Ok(Some(page))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 🧪 FileSourceConfig holds the filename. The entire raison d'être.
+    /// "I came, I saw, I read the file." — Julius Caesar, systems engineer 🦆
+    #[test]
+    fn the_one_where_source_config_is_just_a_filename() {
+        // -- 📂 The humble filename. Carrier of dreams. Pointer to bytes.
+        let config = FileSourceConfig {
+            file_name: "input.ndjson".to_string(),
+        };
+        assert_eq!(config.file_name, "input.ndjson");
+    }
+
+    /// 🧪 FileSourceConfig deserializes from JSON.
+    #[test]
+    fn the_one_where_source_config_deserializes_from_json() {
+        // -- 📡 JSON → struct. The serde two-step. Classic. Timeless. Like a little black dress.
+        let json = r#"{"file_name": "/data/rally-track/documents.json"}"#;
+        let config: FileSourceConfig = serde_json::from_str(json)
+            .expect("💀 FileSourceConfig deserialization failed on perfectly valid JSON. Rude.");
+        assert_eq!(config.file_name, "/data/rally-track/documents.json");
+    }
+
+    /// 🧪 FileSource::new fails gracefully when the file doesn't exist.
+    /// "Looking for love in all the wrong directories." — Ancient UNIX proverb 💀
+    #[tokio::test]
+    async fn the_one_where_the_file_doesnt_exist_and_we_handle_it_with_grace() {
+        // -- 📂 File not found. The saddest error in all of computing. Even sadder than 418 I'm a Teapot.
+        let config = FileSourceConfig {
+            file_name: "/tmp/this_file_absolutely_does_not_exist_kravex_test.ndjson".to_string(),
+        };
+        let result = FileSource::new(config, 10_000_000, 1000).await;
+        assert!(
+            result.is_err(),
+            "FileSource::new should fail when the file doesn't exist — not silently pretend everything is fine"
+        );
     }
 }

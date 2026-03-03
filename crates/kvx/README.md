@@ -12,7 +12,7 @@ Core library for kravex — the zero-config search migration engine. Raw pages, 
 - **Dependents**: `kvx-cli`
 - **Dependencies**: anyhow, async-channel, figment, reqwest, serde, serde_json, tokio, tokio-util, tracing, async-trait, futures, indicatif, comfy-table, aws-sdk-s3, aws-config
 - **Edition**: 2024
-- **Test count**: 101 (kvx crate)
+- **Test count**: 117 (kvx crate)
 - **Modules**:
   - `app_config` — `AppConfig`, `RuntimeConfig`, `ControllerConfig` + module subdir (`source_config.rs`, `sink_config.rs`); `build_backend()` factory on enums; re-exports `ThrottleAppConfig`, `SourceThrottleConfig`, `SinkThrottleConfig`
   - `app_config/source_config` — `SourceConfig` enum + `build_backend()` factory
@@ -31,7 +31,7 @@ Core library for kravex — the zero-config search migration engine. Raw pages, 
   - `composers` — `Composer` trait + `NdjsonComposer`/`JsonArrayComposer` + `ComposerBackend`
   - `transforms` — `Transform` trait + `DocumentTransformer` enum (Cow-based); `RallyS3ToEs`, `EsHitToBulk`, `Passthrough`
   - `progress` — TUI metrics
-  - `common` — `Hit`/`HitBatch` (legacy dead code, not in pipeline)
+  - *(`common` — removed: Hit/HitBatch dead code purged)*
 
 ## Pipeline Architecture (v17 — Phase 1-6 refactor complete)
 ```
@@ -165,7 +165,7 @@ lib.rs ──► app_config (AppConfig, RuntimeConfig, ControllerConfig)
 # Notes for future reference
 
 - POC/MVP stage — API surface is unstable
-- `Hit`/`HitBatch` in `common.rs` are now dead code — pipeline uses raw pages throughout
+- `common.rs` (`Hit`/`HitBatch`) was purged — pipeline uses raw pages throughout
 - `controllers/` module **renamed** to `throttlers/` in Phase 1 — `ThrottleConfig` moved to `throttlers.rs`
 - `supervisors/workers/` **flattened** to `workers/` in Phase 3
 - `AppConfig` fields renamed: `source_config` → `source`, `sink_config` → `sink` (Phase 4)
@@ -191,7 +191,7 @@ lib.rs ──► app_config (AppConfig, RuntimeConfig, ControllerConfig)
 - v14 PID controller (batch sizing): `Controller` trait, `PidBytesToDocCount`, `set_page_size_hint()` on Source
 - v15 PID controller throttling: `ThrottleController` trait, `PidControllerBytesToMs`, `ThrottleConfig` in `ThrottleAppConfig`
 - v16 OpenSearch backend + ES source: real PIT + search_after, `EsHitToBulk` transform, 69 tests
-- v17 six-phase refactor (current — 101 kvx tests, 9 kvx-cli tests = 110 total):
+- v17 six-phase refactor (101 kvx tests, 9 kvx-cli tests = 110 total):
   - Phase 1: `controllers/` → `throttlers/`; `ThrottleConfig` moved to `throttlers.rs`
   - Phase 2: `sink.send()` → `sink.drain()`; `source.next_page()` → `source.pump(doc_count_hint)`; `set_page_size_hint()` eliminated
   - Phase 3: `supervisors/workers/` → `workers/` (top-level flat)
@@ -224,6 +224,15 @@ max_request_size_bytes = 131072
 # max_bytes = 104857600
 # initial_output_bytes = 10485760
 ```
+
+- v18 code review + hardening (current — 117 kvx tests, 9 kvx-cli tests = 126 total):
+  - Blanket `#![allow(dead_code, unused_variables, unused_imports)]` removed from both crates
+  - 9 unused imports/variables cleaned up (file_sink, file_source, in_mem_sink, composers, supervisors)
+  - All 17 clippy warnings resolved: collapsible_if, derivable_impl, needless_borrow, doc formatting, is_multiple_of, empty doc line, large_enum_variant (Box<RunArgs>)
+  - `SinkBackend`/`SourceBackend` enums changed from `pub` to `pub(crate)` — fixes 7 private_interfaces warnings
+  - CI/CD enhanced: `cargo clippy -- -D warnings`, `cargo fmt --check`, cargo caching, pinned toolchain
+  - +16 new unit tests: ES sink (3), ES source (4), File sink (3), File source (3), progress.rs (3)
+  - `max_request_size_bytes` param in `start_workers` annotated as unused (TODO: wire to SinkWorker)
 
 ## Available Rally Tracks
 big5, clickbench, eventdata, geonames, geopoint, geopointshape, geoshape, http_logs, nested, neural_search, noaa, noaa_semantic_search, nyc_taxis, percolator, pmc, so, treccovid_semantic_search, vectorsearch

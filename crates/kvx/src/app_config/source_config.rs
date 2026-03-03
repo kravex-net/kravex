@@ -12,12 +12,12 @@
 use anyhow::Result;
 use serde::Deserialize;
 
+use crate::backends::SourceBackend;
 use crate::backends::elasticsearch::{ElasticsearchSource, ElasticsearchSourceConfig};
 use crate::backends::file::{FileSource, FileSourceConfig};
 use crate::backends::in_mem::InMemorySource;
 use crate::backends::opensearch::{OpenSearchSource, OpenSearchSourceConfig};
 use crate::backends::s3_rally::{S3RallySource, S3RallySourceConfig};
-use crate::backends::SourceBackend;
 use crate::throttlers::SourceThrottleConfig;
 
 /// 🎭 SourceConfig: the velvet rope at the backend club.
@@ -54,13 +54,18 @@ impl SourceConfig {
     /// The `throttle` arg provides batch sizing — max_batch_size_bytes and max_batch_size_docs.
     /// Backends that need them (File, S3Rally) receive them as constructor args.
     /// ES/OpenSearch use doc count via pump() hint. InMemory ignores everything. 🦆
-    pub(crate) async fn build_backend(&self, throttle: &SourceThrottleConfig) -> Result<SourceBackend> {
+    pub(crate) async fn build_backend(
+        &self,
+        throttle: &SourceThrottleConfig,
+    ) -> Result<SourceBackend> {
         let max_batch_size_bytes = throttle.max_batch_size_bytes;
         let max_batch_size_docs = throttle.max_batch_size_docs;
 
         match self {
             SourceConfig::File(file_cfg) => {
-                let src = FileSource::new(file_cfg.clone(), max_batch_size_bytes, max_batch_size_docs).await?;
+                let src =
+                    FileSource::new(file_cfg.clone(), max_batch_size_bytes, max_batch_size_docs)
+                        .await?;
                 Ok(SourceBackend::File(src))
             }
             SourceConfig::InMemory(_) => {
@@ -76,7 +81,9 @@ impl SourceConfig {
                 Ok(SourceBackend::OpenSearch(src))
             }
             SourceConfig::S3Rally(s3_cfg) => {
-                let src = S3RallySource::new(s3_cfg.clone(), max_batch_size_bytes, max_batch_size_docs).await?;
+                let src =
+                    S3RallySource::new(s3_cfg.clone(), max_batch_size_bytes, max_batch_size_docs)
+                        .await?;
                 Ok(SourceBackend::S3Rally(src))
             }
         }

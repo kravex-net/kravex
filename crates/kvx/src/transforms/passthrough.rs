@@ -76,7 +76,10 @@ mod tests {
         let not_json = "this is not json and that's fine";
         let the_items = Passthrough.transform(not_json)?;
         assert_eq!(the_items[0].as_ref(), not_json);
-        assert!(matches!(the_items[0], Cow::Borrowed(_)), "Still borrowed! Still free!");
+        assert!(
+            matches!(the_items[0], Cow::Borrowed(_)),
+            "Still borrowed! Still free!"
+        );
         Ok(())
     }
 
@@ -85,7 +88,11 @@ mod tests {
         // 🧪 Passthrough treats the whole page as one item — it's the Composer's job to split
         let multi_line = "line1\nline2\nline3";
         let the_items = Passthrough.transform(multi_line)?;
-        assert_eq!(the_items.len(), 1, "Passthrough doesn't split — one page, one item");
+        assert_eq!(
+            the_items.len(),
+            1,
+            "Passthrough doesn't split — one page, one item"
+        );
         assert_eq!(the_items[0].as_ref(), multi_line);
         Ok(())
     }

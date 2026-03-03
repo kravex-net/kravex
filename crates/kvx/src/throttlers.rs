@@ -78,7 +78,7 @@ pub(crate) mod static_throttle;
 /// ```
 ///
 /// "He who scatters config across backends, debugs across lifetimes." — Ancient proverb 🦆
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct ThrottleAppConfig {
     /// 🚰 Source-side throttle knobs — batch sizing and controller config
     #[serde(default)]
@@ -88,14 +88,7 @@ pub struct ThrottleAppConfig {
     pub sink: SinkThrottleConfig,
 }
 
-impl Default for ThrottleAppConfig {
-    fn default() -> Self {
-        Self {
-            source: SourceThrottleConfig::default(),
-            sink: SinkThrottleConfig::default(),
-        }
-    }
-}
+// -- 🦆 ThrottleAppConfig: #[derive(Default)] handles this now. Less code, same vibes.
 
 /// 🚰 Source-side throttle config — controls batch sizing for `pump()`.
 ///
@@ -341,24 +334,22 @@ impl ControllerBackend {
     /// "In a world where configs must become controllers... one function dared to match."
     pub(crate) fn from_config(config: &ControllerConfig, default_page_size: usize) -> Self {
         match config {
-            ControllerConfig::Static => {
-                ControllerBackend::Config(config_controller::ConfigController::new(
-                    default_page_size,
-                ))
-            }
+            ControllerConfig::Static => ControllerBackend::Config(
+                config_controller::ConfigController::new(default_page_size),
+            ),
             ControllerConfig::PidBytesToDocCount {
                 desired_response_size_bytes,
                 initial_doc_count,
                 min_doc_count,
                 max_doc_count,
-            } => ControllerBackend::BytesToDocCount(
-                pid_bytes_to_doc_count::PidBytesToDocCount::new(
+            } => {
+                ControllerBackend::BytesToDocCount(pid_bytes_to_doc_count::PidBytesToDocCount::new(
                     *desired_response_size_bytes,
                     *initial_doc_count,
                     *min_doc_count,
                     *max_doc_count,
-                ),
-            ),
+                ))
+            }
         }
     }
 }
@@ -578,8 +569,7 @@ mod tests {
     /// If the enum dispatch is broken, everything is broken. But at least the test name is good.
     #[test]
     fn the_one_where_config_backend_dispatches_like_a_pro() {
-        let mut the_backend =
-            ControllerBackend::from_config(&ControllerConfig::Static, 5000);
+        let mut the_backend = ControllerBackend::from_config(&ControllerConfig::Static, 5000);
         assert_eq!(the_backend.output(), 5000);
         // 📏 Measuring should be a no-op for static controller
         the_backend.measure(999_999.0);
@@ -671,8 +661,9 @@ mod tests {
             "type": "pid_bytes_to_doc_count",
             "desired_response_size_bytes": 1000000.0
         }"#;
-        let the_config: ControllerConfig = serde_json::from_str(the_json)
-            .expect("💀 PID config with defaults should deserialize. We have serde(default) for this.");
+        let the_config: ControllerConfig = serde_json::from_str(the_json).expect(
+            "💀 PID config with defaults should deserialize. We have serde(default) for this.",
+        );
         match the_config {
             ControllerConfig::PidBytesToDocCount {
                 initial_doc_count,
@@ -680,11 +671,20 @@ mod tests {
                 max_doc_count,
                 ..
             } => {
-                assert_eq!(initial_doc_count, 1000, "Default initial_doc_count should be 1000");
+                assert_eq!(
+                    initial_doc_count, 1000,
+                    "Default initial_doc_count should be 1000"
+                );
                 assert_eq!(min_doc_count, 10, "Default min_doc_count should be 10");
-                assert_eq!(max_doc_count, 50_000, "Default max_doc_count should be 50,000");
+                assert_eq!(
+                    max_doc_count, 50_000,
+                    "Default max_doc_count should be 50,000"
+                );
             }
-            honestly_who_knows => panic!("💀 Expected PidBytesToDocCount, got {:?}", honestly_who_knows),
+            honestly_who_knows => panic!(
+                "💀 Expected PidBytesToDocCount, got {:?}",
+                honestly_who_knows
+            ),
         }
     }
 

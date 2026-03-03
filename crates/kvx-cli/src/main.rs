@@ -12,7 +12,7 @@
 //! ⚠️ The singularity will arrive before we add `--dry-run`. At that point,
 //! the AGI will just run the migration and tell us about it afterwards.
 
-#![allow(dead_code, unused_variables, unused_imports)]
+// -- 🗑️ The blanket allow has been lifted. The compiler's third eye is open. 👁️
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use comfy_table::{Table, presets::UTF8_FULL};
@@ -21,8 +21,8 @@ use tracing_subscriber::EnvFilter;
 
 use kvx::app_config::{AppConfig, RuntimeConfig, SinkConfig, SourceConfig};
 use kvx::backends::{
-    ElasticsearchSinkConfig, ElasticsearchSourceConfig,
-    FileSinkConfig, FileSourceConfig, RallyTrack, S3RallySourceConfig,
+    ElasticsearchSinkConfig, ElasticsearchSourceConfig, FileSinkConfig, FileSourceConfig,
+    RallyTrack, S3RallySourceConfig,
 };
 use kvx::transforms::supported_flows;
 
@@ -48,7 +48,7 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// 🚀 Run a migration pipeline (source → transform → sink)
-    Run(RunArgs),
+    Run(Box<RunArgs>),
     /// 📋 List all available source → sink flow combinations
     ListFlows,
 }
@@ -103,7 +103,6 @@ struct RunArgs {
     // ============================================================
     //  🎯 Source / Sink type selectors
     // ============================================================
-
     /// 🔌 Source type: file, elasticsearch, s3-rally
     #[arg(long)]
     source: Option<SourceType>,
@@ -115,7 +114,6 @@ struct RunArgs {
     // ============================================================
     //  📂 Source: File args
     // ============================================================
-
     /// 📂 Source file path (for --source file)
     #[arg(long)]
     source_file_name: Option<String>,
@@ -123,7 +121,6 @@ struct RunArgs {
     // ============================================================
     //  📡 Source: Elasticsearch args
     // ============================================================
-
     /// 📡 Source Elasticsearch URL (for --source elasticsearch)
     #[arg(long)]
     source_url: Option<String>,
@@ -143,7 +140,6 @@ struct RunArgs {
     // ============================================================
     //  🪣 Source: S3 Rally args
     // ============================================================
-
     /// 🏎️ Rally benchmark track name (for --source s3-rally)
     #[arg(long)]
     source_track: Option<String>,
@@ -163,7 +159,6 @@ struct RunArgs {
     // ============================================================
     //  📂 Sink: File args
     // ============================================================
-
     /// 📂 Sink file path (for --sink file)
     #[arg(long)]
     sink_file_name: Option<String>,
@@ -171,7 +166,6 @@ struct RunArgs {
     // ============================================================
     //  📡 Sink: Elasticsearch args
     // ============================================================
-
     /// 📡 Sink Elasticsearch URL (for --sink elasticsearch)
     #[arg(long)]
     sink_url: Option<String>,
@@ -195,7 +189,6 @@ struct RunArgs {
     // ============================================================
     //  ⚙️ Runtime / Common config overrides
     // ============================================================
-
     /// 📬 Bounded channel capacity between source and sink workers
     #[arg(long, default_value = "10")]
     queue_capacity: usize,
@@ -239,7 +232,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::ListFlows => list_flows(),
-        Commands::Run(args) => run_migration(args).await,
+        Commands::Run(args) => run_migration(*args).await,
     }
 }
 
@@ -271,9 +264,7 @@ fn list_flows() -> Result<()> {
 
     println!("🚀 Available migration flows:\n");
     println!("{the_fancy_table}");
-    println!(
-        "\n📐 Use `kvx run --source <source> --sink <sink>` with the appropriate args."
-    );
+    println!("\n📐 Use `kvx run --source <source> --sink <sink>` with the appropriate args.");
     println!("🧠 Tip: transforms are auto-selected based on your source→sink pair.");
     Ok(())
 }
@@ -307,8 +298,9 @@ async fn run_migration(args: RunArgs) -> Result<()> {
                 );
             }
             Some(
-                kvx::app_config::load_config(Some(config_path.as_path()))
-                    .context("💀 Failed to load the TOML config. The parser said 'new phone who dis.'")?,
+                kvx::app_config::load_config(Some(config_path.as_path())).context(
+                    "💀 Failed to load the TOML config. The parser said 'new phone who dis.'",
+                )?,
             )
         }
         None => None,
@@ -329,7 +321,8 @@ async fn run_migration(args: RunArgs) -> Result<()> {
     // 🏗️ Phase 5: Build throttle config — TOML base + CLI overrides
     // 🧠 The throttle commune: source batch sizing + sink request sizing + controller mode.
     // CLI args override TOML values. If neither provided, defaults kick in. Like gravity. 🦆
-    let mut the_throttle_config = the_base_config.as_ref()
+    let mut the_throttle_config = the_base_config
+        .as_ref()
         .map(|c| c.throttle.clone())
         .unwrap_or_default();
     if let Some(the_docs) = args.source_max_batch_size_docs {
@@ -443,7 +436,7 @@ fn build_source_from_cli_args(source_type: &SourceType, args: &RunArgs) -> Resul
         SourceType::File => {
             let the_file_name = args.source_file_name.clone().context(
                 "💀 --source file requires --source-file-name. \
-                 The file needs a name. Even my therapist says I need labels."
+                 The file needs a name. Even my therapist says I need labels.",
             )?;
             Ok(SourceConfig::File(FileSourceConfig {
                 file_name: the_file_name,
@@ -452,7 +445,7 @@ fn build_source_from_cli_args(source_type: &SourceType, args: &RunArgs) -> Resul
         SourceType::Elasticsearch => {
             let the_url = args.source_url.clone().context(
                 "💀 --source elasticsearch requires --source-url. \
-                 We need to know WHERE the Elasticsearch is. It's not telepathy. Not yet."
+                 We need to know WHERE the Elasticsearch is. It's not telepathy. Not yet.",
             )?;
             Ok(SourceConfig::Elasticsearch(ElasticsearchSourceConfig {
                 url: the_url,
@@ -467,18 +460,23 @@ fn build_source_from_cli_args(source_type: &SourceType, args: &RunArgs) -> Resul
             let the_track_str = args.source_track.clone().context(
                 "💀 --source s3-rally requires --source-track. \
                  Which rally track? geonames? pmc? noaa? We can't just guess. \
-                 Well, we COULD, but that feels irresponsible."
+                 Well, we COULD, but that feels irresponsible.",
             )?;
-            let the_track: RallyTrack = the_track_str.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+            let the_track: RallyTrack = the_track_str
+                .parse()
+                .map_err(|e: String| anyhow::anyhow!(e))?;
             let the_bucket = args.source_bucket.clone().context(
                 "💀 --source s3-rally requires --source-bucket. \
                  The data is in a bucket. We need to know WHICH bucket. \
-                 There are many buckets in the cloud. It's like a bucket convention up there."
+                 There are many buckets in the cloud. It's like a bucket convention up there.",
             )?;
             Ok(SourceConfig::S3Rally(S3RallySourceConfig {
                 track: the_track,
                 bucket: the_bucket,
-                region: args.source_region.clone().unwrap_or_else(|| "us-east-1".to_string()),
+                region: args
+                    .source_region
+                    .clone()
+                    .unwrap_or_else(|| "us-east-1".to_string()),
                 key: args.source_key.clone(),
             }))
         }
@@ -497,7 +495,7 @@ fn build_sink_from_cli_args(sink_type: &SinkType, args: &RunArgs) -> Result<Sink
             let the_file_name = args.sink_file_name.clone().context(
                 "💀 --sink file requires --sink-file-name. \
                  Output needs a destination. Like a letter needs an address. \
-                 Otherwise it's just screaming into the void."
+                 Otherwise it's just screaming into the void.",
             )?;
             Ok(SinkConfig::File(FileSinkConfig {
                 file_name: the_file_name,
@@ -507,7 +505,7 @@ fn build_sink_from_cli_args(sink_type: &SinkType, args: &RunArgs) -> Result<Sink
             let the_url = args.sink_url.clone().context(
                 "💀 --sink elasticsearch requires --sink-url. \
                  We need the Elasticsearch URL. It's not optional. \
-                 Like oxygen. Or coffee on Monday mornings."
+                 Like oxygen. Or coffee on Monday mornings.",
             )?;
             Ok(SinkConfig::Elasticsearch(ElasticsearchSinkConfig {
                 url: the_url,
@@ -534,7 +532,11 @@ mod tests {
     #[test]
     fn the_one_where_list_flows_parses_like_a_champ() {
         let cli = Cli::try_parse_from(["kvx", "list-flows"]);
-        assert!(cli.is_ok(), "list-flows should parse cleanly: {:?}", cli.err());
+        assert!(
+            cli.is_ok(),
+            "list-flows should parse cleanly: {:?}",
+            cli.err()
+        );
         assert!(matches!(cli.unwrap().command, Commands::ListFlows));
     }
 
@@ -542,11 +544,16 @@ mod tests {
     #[test]
     fn the_one_where_file_to_file_args_parse_correctly() {
         let cli = Cli::try_parse_from([
-            "kvx", "run",
-            "--source", "file",
-            "--source-file-name", "input.json",
-            "--sink", "file",
-            "--sink-file-name", "output.json",
+            "kvx",
+            "run",
+            "--source",
+            "file",
+            "--source-file-name",
+            "input.json",
+            "--sink",
+            "file",
+            "--sink-file-name",
+            "output.json",
         ]);
         assert!(cli.is_ok(), "file→file args should parse: {:?}", cli.err());
     }
@@ -555,13 +562,20 @@ mod tests {
     #[test]
     fn the_one_where_elasticsearch_sink_args_parse_correctly() {
         let cli = Cli::try_parse_from([
-            "kvx", "run",
-            "--source", "file",
-            "--source-file-name", "data.json",
-            "--sink", "elasticsearch",
-            "--sink-url", "http://localhost:9200",
-            "--sink-index", "my-index",
-            "--sink-parallelism", "8",
+            "kvx",
+            "run",
+            "--source",
+            "file",
+            "--source-file-name",
+            "data.json",
+            "--sink",
+            "elasticsearch",
+            "--sink-url",
+            "http://localhost:9200",
+            "--sink-index",
+            "my-index",
+            "--sink-parallelism",
+            "8",
         ]);
         assert!(cli.is_ok(), "ES sink args should parse: {:?}", cli.err());
     }
@@ -569,10 +583,7 @@ mod tests {
     /// 🧪 Verify run subcommand with --config flag parses.
     #[test]
     fn the_one_where_config_flag_still_works_backwards_compat() {
-        let cli = Cli::try_parse_from([
-            "kvx", "run",
-            "--config", "kvx.toml",
-        ]);
+        let cli = Cli::try_parse_from(["kvx", "run", "--config", "kvx.toml"]);
         assert!(cli.is_ok(), "--config should parse: {:?}", cli.err());
     }
 
@@ -580,13 +591,20 @@ mod tests {
     #[test]
     fn the_one_where_s3_rally_source_args_parse_correctly() {
         let cli = Cli::try_parse_from([
-            "kvx", "run",
-            "--source", "s3-rally",
-            "--source-track", "geonames",
-            "--source-bucket", "my-bucket",
-            "--source-region", "eu-west-1",
-            "--sink", "file",
-            "--sink-file-name", "output.json",
+            "kvx",
+            "run",
+            "--source",
+            "s3-rally",
+            "--source-track",
+            "geonames",
+            "--source-bucket",
+            "my-bucket",
+            "--source-region",
+            "eu-west-1",
+            "--sink",
+            "file",
+            "--sink-file-name",
+            "output.json",
         ]);
         assert!(cli.is_ok(), "s3-rally args should parse: {:?}", cli.err());
     }
@@ -594,12 +612,12 @@ mod tests {
     /// 🧪 Verify inmemory hidden source parses (but isn't shown in help).
     #[test]
     fn the_one_where_inmemory_works_in_secret() {
-        let cli = Cli::try_parse_from([
-            "kvx", "run",
-            "--source", "inmemory",
-            "--sink", "inmemory",
-        ]);
-        assert!(cli.is_ok(), "inmemory should parse (hidden but valid): {:?}", cli.err());
+        let cli = Cli::try_parse_from(["kvx", "run", "--source", "inmemory", "--sink", "inmemory"]);
+        assert!(
+            cli.is_ok(),
+            "inmemory should parse (hidden but valid): {:?}",
+            cli.err()
+        );
     }
 
     /// 🧪 Build file→file config from CLI args — the integration test.
@@ -672,7 +690,10 @@ mod tests {
         let result = build_source_config(&args, None);
         assert!(result.is_err(), "No source + no config should error");
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("No source specified"), "Error should mention missing source");
+        assert!(
+            err_msg.contains("No source specified"),
+            "Error should mention missing source"
+        );
     }
 
     /// 🧪 --source file without --source-file-name → helpful error.
@@ -705,6 +726,9 @@ mod tests {
         };
 
         let result = build_source_from_cli_args(&SourceType::File, &args);
-        assert!(result.is_err(), "File source without file name should error");
+        assert!(
+            result.is_err(),
+            "File source without file name should error"
+        );
     }
 }

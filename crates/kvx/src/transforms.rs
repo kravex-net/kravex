@@ -331,11 +331,10 @@ impl Transform for DocumentTransformer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backends::file::{FileSinkConfig, FileSourceConfig};
     use crate::backends::ElasticsearchSinkConfig;
     use crate::backends::ElasticsearchSourceConfig;
     use crate::backends::S3RallySourceConfig;
-
+    use crate::backends::file::{FileSinkConfig, FileSourceConfig};
 
     /// 🧪 DRIFT DETECTION — the smoke detector for code drift. 🔥
     ///
@@ -383,7 +382,9 @@ mod tests {
                     key: None,
                 }),
                 "inmemory" => SourceConfig::InMemory(()),
-                other_dimension => panic!("💀 Unknown source type in drift test: {}", other_dimension),
+                other_dimension => {
+                    panic!("💀 Unknown source type in drift test: {}", other_dimension)
+                }
             }
         }
 
@@ -401,7 +402,9 @@ mod tests {
                     index: Some("dummy".to_string()),
                 }),
                 "inmemory" => SinkConfig::InMemory(()),
-                other_dimension => panic!("💀 Unknown sink type in drift test: {}", other_dimension),
+                other_dimension => {
+                    panic!("💀 Unknown sink type in drift test: {}", other_dimension)
+                }
             }
         }
 
@@ -423,8 +426,7 @@ mod tests {
                 let source = dummy_source(source_type);
                 let sink = dummy_sink(sink_type);
 
-                let the_result =
-                    catch_unwind(|| DocumentTransformer::from_configs(&source, &sink));
+                let the_result = catch_unwind(|| DocumentTransformer::from_configs(&source, &sink));
 
                 if the_result.is_ok() {
                     // 🧠 InMemory→InMemory is allowed to be absent — testing-only, like the
@@ -436,7 +438,8 @@ mod tests {
                             "💀 DRIFT DETECTED: from_configs() accepts {}→{} but \
                              supported_flows() doesn't list it. Add it to supported_flows()! \
                              The menu must match the kitchen. 🍳",
-                            source_type, sink_type
+                            source_type,
+                            sink_type
                         );
                     }
                 }
@@ -504,7 +507,10 @@ mod tests {
         });
 
         let the_transformer = DocumentTransformer::from_configs(&source, &sink);
-        assert!(matches!(the_transformer, DocumentTransformer::Passthrough(_)));
+        assert!(matches!(
+            the_transformer,
+            DocumentTransformer::Passthrough(_)
+        ));
 
         // 🔄 Passthrough returns the entire page as one borrowed Cow item
         let the_input = r#"{"whatever":"goes"}"#;
@@ -512,7 +518,10 @@ mod tests {
         assert_eq!(the_items.len(), 1);
         assert_eq!(the_items[0].as_ref(), the_input);
         // 🐄 Verify it's actually borrowed — the whole point of the Cow revolution!
-        assert!(matches!(the_items[0], Cow::Borrowed(_)), "Passthrough must borrow, not clone!");
+        assert!(
+            matches!(the_items[0], Cow::Borrowed(_)),
+            "Passthrough must borrow, not clone!"
+        );
 
         Ok(())
     }
@@ -523,7 +532,10 @@ mod tests {
         let source = SourceConfig::InMemory(());
         let sink = SinkConfig::InMemory(());
         let the_transformer = DocumentTransformer::from_configs(&source, &sink);
-        assert!(matches!(the_transformer, DocumentTransformer::Passthrough(_)));
+        assert!(matches!(
+            the_transformer,
+            DocumentTransformer::Passthrough(_)
+        ));
     }
 
     /// 🧪 Full pipeline integration: resolve + transform Rally→ES multi-doc page.
@@ -571,7 +583,10 @@ mod tests {
         assert!(the_source.get("_rallyAPIMajor").is_none());
         assert!(the_source.get("_ref").is_none());
         assert!(the_source.get("_CreatedAt").is_none());
-        assert_eq!(the_source["Name"], "The one that made it through the whole pipeline");
+        assert_eq!(
+            the_source["Name"],
+            "The one that made it through the whole pipeline"
+        );
 
         // ✅ Second doc
         let the_lines2: Vec<&str> = the_items[1].as_ref().split('\n').collect();
@@ -718,8 +733,10 @@ mod tests {
     /// "It works on my cluster" — the OpenSearch version of "it works on my machine."
     #[test]
     fn the_one_where_opensearch_to_opensearch_resolves_to_es_hit_to_bulk() {
-        let the_transformer =
-            DocumentTransformer::from_configs(&opensearch_source_config(), &opensearch_sink_config());
+        let the_transformer = DocumentTransformer::from_configs(
+            &opensearch_source_config(),
+            &opensearch_sink_config(),
+        );
         assert!(
             matches!(the_transformer, DocumentTransformer::EsHitToBulk(_)),
             "OpenSearch → OpenSearch: same engine, different cluster, EsHitToBulk bridges the gap"
