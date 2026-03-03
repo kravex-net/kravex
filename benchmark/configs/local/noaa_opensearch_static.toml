@@ -1,0 +1,24 @@
+# ai
+# noaa_opensearch_static.toml — File → OpenSearch (local, port 9201), NOAA weather, Static throttle
+# "This is fine." — dog in the burning room, also: static throttle under load
+# NOAA weather data meets OpenSearch. Neither asked for this relationship.
+# Static: we're not overthinking it. We're just... sending. Boldly. Into the void.
+# 🦆 (weather duck, refuses to look at the forecast)
+
+[runtime]
+queue_capacity = 16
+sink_parallelism = 4
+
+[source.File]
+file_name = "benchmark/data/noaa.ndjson"
+
+[sink.OpenSearch]
+url = "http://localhost:9201"
+index = "benchmark_noaa"
+
+[throttle.source]
+max_batch_size_docs = 5000
+max_batch_size_bytes = 52428800
+
+[throttle.sink]
+max_request_size_bytes = 52428800

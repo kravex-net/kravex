@@ -1,0 +1,24 @@
+# ai
+# pmc_static.toml — File → Elasticsearch, PMC full-text articles dataset, Static throttle
+# "Academic papers indexed at the speed of peer review. Which is to say: eventually."
+# PMC: 3 million+ articles. Static throttle: unbothered, moisturized, in its lane.
+# TODO: win the lottery, retire, let someone else tune the request size
+# 🦆 (publish or perish — the duck published)
+
+[runtime]
+queue_capacity = 16
+sink_parallelism = 4
+
+[source.File]
+file_name = "benchmark/data/pmc.ndjson"
+
+[sink.Elasticsearch]
+url = "http://localhost:9200"
+index = "benchmark_pmc"
+
+[throttle.source]
+max_batch_size_docs = 5000
+max_batch_size_bytes = 52428800
+
+[throttle.sink]
+max_request_size_bytes = 52428800

@@ -1,0 +1,23 @@
+# ai
+# 🏢 Employees index — 10k docs of people who definitely exist
+# "Every employee is a snowflake. A bulk-indexed snowflake." 🦆
+
+[runtime]
+queue_capacity = 8
+sink_parallelism = 4
+
+[source.Elasticsearch]
+url = "http://localhost:9200"
+index = "employees"
+
+[sink.OpenSearch]
+url = "http://localhost:9201"
+index = "employees"
+danger_accept_invalid_certs = false
+
+[throttle.source]
+max_batch_size_bytes = 131072
+max_batch_size_docs = 5000
+
+[throttle.sink]
+max_request_size_bytes = 131072

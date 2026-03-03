@@ -1,0 +1,23 @@
+# ai
+# geonames_static.toml — File → Elasticsearch, geonames dataset, Static throttle
+# "In a world where 11 million place names must migrate... one config dared to be boring."
+# Static throttle: no PID, no drama, just bytes flowing like a calm river in a budget nature documentary.
+# 🦆 (he lives here now, don't ask why, he just vibes)
+
+[runtime]
+queue_capacity = 16
+sink_parallelism = 4
+
+[source.File]
+file_name = "benchmark/data/geonames.ndjson"
+
+[sink.Elasticsearch]
+url = "http://localhost:9200"
+index = "benchmark_geonames"
+
+[throttle.source]
+max_batch_size_docs = 5000
+max_batch_size_bytes = 52428800
+
+[throttle.sink]
+max_request_size_bytes = 52428800

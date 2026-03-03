@@ -1,0 +1,122 @@
+# ai
+# -- 🦆 "You're gonna need a bigger heap." — Jaws (1975), probably
+# -- 🐳 Unified Docker Compose for Kravex demo + benchmark infrastructure.
+# -- 🔧 Profiles: `demo` (ES 7.17 + OS 2.19), `bench` (ES 8.15 + OS 2.19)
+# -- ⚠️  Cannot run demo and bench simultaneously — same host ports. That's fine, they serve different scenarios.
+# -- ⚠️  DO NOT use these configs in production unless you enjoy incident post-mortems.
+#
+# Usage:
+#   docker compose --profile demo up -d      → ES 7.17 + OS 2.19 (512MB heap)
+#   docker compose --profile bench up -d     → ES 8.15 + OS 2.19 (2GB heap)
+#   docker compose --profile demo down -v    → teardown + nuke volumes
+#   docker compose --profile bench down -v   → teardown + nuke volumes
+
+services:
+
+  # -- 🔍 Elasticsearch 7.17.25 — demo only. The version your enterprise is desperately trying to migrate OFF of.
+  es7:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.25
+    container_name: kvx_demo_es
+    profiles: [demo]
+    environment:
+      - node.name=kvx_demo_es
+      - cluster.name=kvx-demo-es-cluster
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - bootstrap.memory_lock=true
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_demo_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -qv '\"status\":\"red\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # -- 🔍 Elasticsearch 8.15.0 — bench only. The OG, the classic, the one your enterprise contract is paying for.
+  es8:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    container_name: kvx_bench_es
+    profiles: [bench]
+    environment:
+      - node.name=kvx_bench_es
+      - cluster.name=kvx-bench-es-cluster
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.http.ssl.enabled=false
+      - bootstrap.memory_lock=true
+      - indices.memory.index_buffer_size=20%
+      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+    ulimits:
+      # -- 🔒 memlock: -1 means "unlimited", which sounds terrifying but is correct here
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_bench_data:/usr/share/elasticsearch/data
+    healthcheck:
+      # -- ✅ If this curl fails, the cluster is having an existential crisis
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -qv '\"status\":\"red\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # -- 🔍 OpenSearch 2.19.0 — shared across demo + bench. ES's open-source cousin who started a band.
+  opensearch:
+    image: opensearchproject/opensearch:2.19.0
+    container_name: kvx_opensearch
+    profiles: [demo, bench]
+    environment:
+      - node.name=kvx_opensearch
+      - cluster.name=kvx-os-cluster
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=${OS_JAVA_OPTS:--Xms512m -Xmx512m}
+      # -- 🐛 without this, opensearch demands you set a password and ruin the vibe
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      # -- 📡 9201 on host → 9200 in container so both can coexist without a custody battle
+      - "9201:9200"
+    volumes:
+      - os_data:/usr/share/opensearch/data
+    healthcheck:
+      # -- ✅ "I am alive." — OpenSearch, hopefully, after 30 seconds
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health | grep -qv '\"status\":\"red\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+# -- 📦 named volumes so your data survives a compose down (unlike my work-life balance)
+volumes:
+  es_demo_data:
+    driver: local
+  es_bench_data:
+    driver: local
+  os_data:
+    driver: local

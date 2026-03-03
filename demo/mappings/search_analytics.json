@@ -1,0 +1,19 @@
+{
+  "settings": {
+    "number_of_shards": 2,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "event_id": { "type": "keyword" },
+      "query_text": { "type": "text" },
+      "user_id": { "type": "keyword" },
+      "timestamp": { "type": "date" },
+      "result_count": { "type": "integer" },
+      "response_time_ms": { "type": "float" },
+      "clicked_result": { "type": "keyword" },
+      "search_type": { "type": "keyword" },
+      "filters_used": { "type": "keyword" }
+    }
+  }
+}

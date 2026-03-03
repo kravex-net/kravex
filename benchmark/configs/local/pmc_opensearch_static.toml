@@ -1,0 +1,24 @@
+# ai
+# pmc_opensearch_static.toml — File → OpenSearch (local, port 9201), PMC articles, Static throttle
+# "Config not found: We looked everywhere. Under the couch. Behind the fridge. In the junk drawer. Nothing."
+# ...but we FOUND this one. Right here. You're reading it. It exists. That's already a win.
+# PMC articles into local OpenSearch. Static throttle. No cap, this pipeline slaps fr fr.
+# 🦆 (academic duck, published 47 papers, none of them indexed yet)
+
+[runtime]
+queue_capacity = 16
+sink_parallelism = 4
+
+[source.File]
+file_name = "benchmark/data/pmc.ndjson"
+
+[sink.OpenSearch]
+url = "http://localhost:9201"
+index = "benchmark_pmc"
+
+[throttle.source]
+max_batch_size_docs = 5000
+max_batch_size_bytes = 52428800
+
+[throttle.sink]
+max_request_size_bytes = 52428800

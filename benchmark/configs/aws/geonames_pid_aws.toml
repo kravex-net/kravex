@@ -1,0 +1,38 @@
+# ai
+# geonames_pid_aws.toml — File → AWS OpenSearch managed, geonames, PID throttle
+# "Timeout exceeded: We waited. And waited. Like a dog at the window. But the owner never came home."
+# set_point_ms=8000.0 because AWS managed OpenSearch has latency opinions and we must respect them.
+# Replace YOUR_OPENSEARCH_ENDPOINT_HERE. We cannot do it for you. We tried. AWS said no.
+# 🦆 (duck in us-east-1, latency: 8 seconds, mood: stoic)
+
+[runtime]
+queue_capacity = 16
+sink_parallelism = 8
+
+[source.File]
+file_name = "benchmark/data/geonames.ndjson"
+
+[sink.OpenSearch]
+url = "https://YOUR_OPENSEARCH_ENDPOINT_HERE"
+username = "admin"
+password = "YOUR_PASSWORD_HERE"
+index = "benchmark_geonames"
+
+[throttle.source]
+max_batch_size_docs = 5000
+max_batch_size_bytes = 52428800
+
+[throttle.source.controller]
+type = "pid_bytes_to_doc_count"
+desired_response_size_bytes = 5242880.0
+initial_doc_count = 1000
+min_doc_count = 100
+max_doc_count = 10000
+
+[throttle.sink]
+max_request_size_bytes = 52428800
+mode = "Pid"
+set_point_ms = 8000.0
+min_bytes = 1048576
+max_bytes = 52428800
+initial_output_bytes = 10485760

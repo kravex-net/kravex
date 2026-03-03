@@ -31,4 +31,4 @@ pub use file::{FileSinkConfig, FileSourceConfig};
 pub use opensearch::{OpenSearchSinkConfig, OpenSearchSourceConfig};
 pub use s3_rally::{S3RallySourceConfig, RallyTrack};
 pub use sink::{Sink, SinkBackend};
-pub use source::{Source, SourceBackend};
+pub(crate) use source::{Source, SourceBackend};

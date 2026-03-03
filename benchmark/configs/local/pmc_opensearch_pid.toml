@@ -1,0 +1,36 @@
+# ai
+# pmc_opensearch_pid.toml — File → OpenSearch (local, port 9201), PMC articles, PID throttle
+# "He who unwraps without matching, panics in production." — Ancient Rust Proverb
+# He who sets PID without profiling first, also panics. But more slowly. With charts.
+# PMC full-text medical literature, locally tuned PID, no babysitting required.
+# 🦆 (duck in scrubs, board certified in throughput optimization)
+
+[runtime]
+queue_capacity = 16
+sink_parallelism = 4
+
+[source.File]
+file_name = "benchmark/data/pmc.ndjson"
+
+[sink.OpenSearch]
+url = "http://localhost:9201"
+index = "benchmark_pmc"
+
+[throttle.source]
+max_batch_size_docs = 5000
+max_batch_size_bytes = 52428800
+
+[throttle.source.controller]
+type = "pid_bytes_to_doc_count"
+desired_response_size_bytes = 5242880.0
+initial_doc_count = 1000
+min_doc_count = 100
+max_doc_count = 10000
+
+[throttle.sink]
+max_request_size_bytes = 52428800
+mode = "Pid"
+set_point_ms = 5000.0
+min_bytes = 1048576
+max_bytes = 52428800
+initial_output_bytes = 10485760

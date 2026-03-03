@@ -1,0 +1,26 @@
+# ai
+# pmc_static_aws.toml — File → AWS OpenSearch managed, PMC articles, Static throttle
+# "If you're reading this, the code review went perfectly. And the AWS bill arrived."
+# 3 million medical articles. Static throttle. In the cloud. At scale. During business hours. On a Friday.
+# Replace YOUR_OPENSEARCH_ENDPOINT_HERE before the on-call engineer reads this at 3am.
+# 🦆 (duck with stethoscope, no medical license, indexing anyway)
+
+[runtime]
+queue_capacity = 16
+sink_parallelism = 8
+
+[source.File]
+file_name = "benchmark/data/pmc.ndjson"
+
+[sink.OpenSearch]
+url = "https://YOUR_OPENSEARCH_ENDPOINT_HERE"
+username = "admin"
+password = "YOUR_PASSWORD_HERE"
+index = "benchmark_pmc"
+
+[throttle.source]
+max_batch_size_docs = 5000
+max_batch_size_bytes = 52428800
+
+[throttle.sink]
+max_request_size_bytes = 52428800

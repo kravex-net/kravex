@@ -1,0 +1,28 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "employee_id": { "type": "keyword" },
+      "first_name": { "type": "text" },
+      "last_name": { "type": "text" },
+      "email": { "type": "keyword" },
+      "department": { "type": "keyword" },
+      "title": { "type": "text" },
+      "hire_date": { "type": "date" },
+      "salary": { "type": "integer" },
+      "skills": { "type": "keyword" },
+      "location": {
+        "type": "nested",
+        "properties": {
+          "city": { "type": "keyword" },
+          "state": { "type": "keyword" },
+          "country": { "type": "keyword" }
+        }
+      },
+      "is_active": { "type": "boolean" }
+    }
+  }
+}

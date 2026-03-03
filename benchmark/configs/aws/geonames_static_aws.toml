@@ -1,0 +1,26 @@
+# ai
+# geonames_static_aws.toml — File → AWS OpenSearch managed, geonames, Static throttle
+# "In a world where egress costs money... one pipeline dared to index geonames anyway."
+# Replace YOUR_OPENSEARCH_ENDPOINT_HERE with your actual endpoint before the mortgage payment clears.
+# sink_parallelism=8 because AWS can handle it and we're paying by the hour.
+# 🦆 (cloud-native duck, 99.9% SLA, billed per quack)
+
+[runtime]
+queue_capacity = 16
+sink_parallelism = 8
+
+[source.File]
+file_name = "benchmark/data/geonames.ndjson"
+
+[sink.OpenSearch]
+url = "https://YOUR_OPENSEARCH_ENDPOINT_HERE"
+username = "admin"
+password = "YOUR_PASSWORD_HERE"
+index = "benchmark_geonames"
+
+[throttle.source]
+max_batch_size_docs = 5000
+max_batch_size_bytes = 52428800
+
+[throttle.sink]
+max_request_size_bytes = 52428800

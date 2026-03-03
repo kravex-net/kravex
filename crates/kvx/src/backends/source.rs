@@ -57,7 +57,7 @@ pub trait Source: std::fmt::Debug {
 /// Think of it as a universal remote. Except it only controls data ingestion. And it's async.
 /// And there is no warranty. Ancient proverb: "He who hardcodes the backend, migrates only once."
 #[derive(Debug)]
-pub enum SourceBackend {
+pub(crate) enum SourceBackend {
     InMemory(in_mem::InMemorySource),
     File(file::FileSource),
     Elasticsearch(elasticsearch::ElasticsearchSource),
