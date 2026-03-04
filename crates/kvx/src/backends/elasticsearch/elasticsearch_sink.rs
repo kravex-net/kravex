@@ -113,11 +113,16 @@ impl ElasticsearchSink {
     /// Pick your auth adventure, but be consistent about it in your config.
     pub(crate) async fn new(config: ElasticsearchSinkConfig) -> Result<Self> {
         // 🔧 Build the HTTP client. 10 second connect timeout because if ES can't handshake
-        // in 10 seconds, it's not having a good time and neither are we. 30 second response
-        // timeout because bulk requests can be meaty and we're not monsters.
+        // in 10 seconds, it's not having a good time and neither are we. 120 second response
+        // timeout because bulk requests can be 50MB+ and ES needs time to process all those
+        // index operations. The old 30s timeout could cause partial commits: ES finishes
+        // indexing but the response arrives after reqwest gives up. With auto-generated _ids,
+        // a re-run would create duplicates instead of upserts. 120s gives ES room to breathe.
+        // 🧠 TRIBAL KNOWLEDGE: The 19.3M-from-11.4M benchmark anomaly was likely caused by
+        // timeout-induced partial commits + re-run with auto-generated document IDs.
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(120))
             .build()
             // -- 💀 "Failed to initialize http client" — a tragedy in one act.
             // -- The curtain rises. reqwest::Client::builder() enters, full of promise.
@@ -200,12 +205,17 @@ impl ElasticsearchSink {
         // -- NDJSON only — no JSON arrays, no XML, no CSV, no hand-coded tab-separated values.
         // -- NDJSON. The only format Elasticsearch respects. Truly the format of people who
         // -- wanted JSON but also wanted to feel slightly superior about it.
-        // 📡 ES 8.x requires the index either in the action line or the URL path.
+        // 📡 ES 8.x requires the index either in the action line OR the URL path.
         // RallyS3ToEs transform emits `{"index":{}}` without `_index`, so we route via URL.
         // When no index is configured (per-doc routing), fall back to the bare `/_bulk` endpoint.
+        // 🧠 TRIBAL KNOWLEDGE: Without index in URL, ES 8.x returns 400 for every doc and
+        // kravex hangs at 0% progress. This was Bug 6 from the benchmark session.
         let the_base_url_trimmed_like_a_fresh_haircut = self.sink_config.url.trim_end_matches('/');
         let bulk_url = match self.sink_config.index {
-            Some(ref index_name) => format!("{}/{}/_bulk", the_base_url_trimmed_like_a_fresh_haircut, index_name),
+            Some(ref index_name) => format!(
+                "{}/{}/_bulk",
+                the_base_url_trimmed_like_a_fresh_haircut, index_name
+            ),
             None => format!("{}/_bulk", the_base_url_trimmed_like_a_fresh_haircut),
         };
         let mut request = self
@@ -213,10 +223,9 @@ impl ElasticsearchSink {
             .post(&bulk_url)
             // ⚠️ Content-Type: application/x-ndjson — not application/json. VERY important.
             // Elasticsearch will return a 406 or silently misbehave without this header.
-            // -- The x- prefix means "we made this up but we're committing to it." Classic.
             .header("Content-Type", "application/x-ndjson");
 
-        // -- 🔒 Same auth dance as the index check — api_key beats basic auth in this club.
+        // 🔒 Auth priority: API key > basic auth — consistent across index check + bulk POST
         if let Some(ref api_key) = self.sink_config.api_key {
             request = request.header("Authorization", format!("ApiKey {}", api_key));
         } else if let Some(ref username) = self.sink_config.username {
@@ -227,33 +236,73 @@ impl ElasticsearchSink {
             .body(request_body)
             .send()
             .await
-            // -- 💀 "Failed to send bulk request" — micro-fiction, act one.
-            // -- We gathered the documents. We serialized them. We built the NDJSON.
-            // -- We formed the HTTP request with artisanal care. We called .send().
-            // -- And the network layer, that capricious deity of bytes and routing tables,
-            // -- looked upon our work... and dropped the packet. No response. No closure.
-            // -- Just an Err. Like sending a love letter and getting a ECONNRESET back.
-            .context("💀 The bulk request never made it to Elasticsearch. We launched the payload into the network and the network responded with what can only be described as 'not vibing with it.' Check connectivity, check timeouts, and check your feelings.")?;
+            .context("💀 The bulk request never made it to Elasticsearch. Check connectivity, check timeouts, check your horoscope.")?;
 
         let status = response.status();
+        // 📡 ALWAYS read the response body — ES bulk returns 200 even when items fail.
+        // Without this check, 429s, mapping errors, and version conflicts are silently swallowed.
+        // 🧠 TRIBAL KNOWLEDGE: This was the likely root cause of the 19.3M-from-11.4M anomaly.
+        // ES returns 200 with `"errors": true` when individual items fail. The old code only
+        // checked the HTTP status, so partial failures were invisible. Combined with
+        // auto-generated _ids (geonames has no ObjectID), any re-indexing creates NEW docs
+        // instead of upserts, inflating the count.
+        let body = response.text().await.unwrap_or_default();
+
         if !status.is_success() {
-            // -- 💀 We got a response! It just... wasn't good news.
-            // The body is fetched for context — it usually contains an 'error' object
-            // explaining which document caused the problem, or which shard is having
-            // -- a rough morning. Elasticsearch error bodies are poetry. Dark poetry.
-            let body = response.text().await.unwrap_or_default();
             anyhow::bail!(
-                "💀 The bulk request arrived, but Elasticsearch looked at our documents and said '{}'. The body of the response read: '{}'. We have no one to blame but ourselves, and possibly whoever wrote the mapping.",
+                "💀 Elasticsearch bulk request failed with HTTP {}. Response: '{}'",
                 status,
                 body
             );
-        } else {
-            // -- ✅ Sent! Gone! Into the index! No cap, this function absolutely slapped.
-            trace!(
-                "🚀 Bulk request landed successfully — documents have left the building, Elvis-style"
+        }
+
+        // 📡 Parse the bulk response body to detect item-level errors.
+        // ES returns {"took": N, "errors": bool, "items": [...]}
+        // When errors=true, at least one item failed (429, 409, mapping error, etc.)
+        // We fail fast on ANY item error — partial indexing is worse than a clean failure
+        // because it's invisible and creates inconsistent state.
+        if let Ok(bulk_response) = serde_json::from_str::<serde_json::Value>(&body)
+            && bulk_response
+                .get("errors")
+                .and_then(|e| e.as_bool())
+                .unwrap_or(false)
+        {
+            // 💀 Count how many items failed for a useful error message
+            let the_item_level_carnage = bulk_response
+                .get("items")
+                .and_then(|items| items.as_array())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter(|item| {
+                            item.as_object()
+                                .and_then(|obj| obj.values().next())
+                                .and_then(|action| action.get("status"))
+                                .and_then(|s| s.as_u64())
+                                .map(|s| s >= 400)
+                                .unwrap_or(false)
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
+
+            let the_total_items = bulk_response
+                .get("items")
+                .and_then(|items| items.as_array())
+                .map(|items| items.len())
+                .unwrap_or(0);
+
+            anyhow::bail!(
+                "💀 Elasticsearch bulk response: HTTP 200 but {}/{} items failed. \
+                 The cluster accepted the request but rejected individual documents. \
+                 This is the silent killer of data migrations — partial success looks \
+                 like full success unless you check the response body. Which we now do.",
+                the_item_level_carnage,
+                the_total_items
             );
         }
 
+        trace!("🚀 Bulk request landed successfully — all items indexed, zero casualties");
         Ok(())
     }
 }

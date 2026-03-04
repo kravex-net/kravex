@@ -146,7 +146,13 @@ impl Source for FileSource {
         // ⚠️ 1MB initial capacity per line — because NDJSON documents can be chunky.
         let mut line = String::with_capacity(1024 * 1024);
 
-        for _ in 0..=self.max_batch_size_docs {
+        // 🧠 TRIBAL KNOWLEDGE: The range is `0..max_batch_size_docs` (EXCLUSIVE upper bound).
+        // This means: read AT MOST max_batch_size_docs raw lines from the BufReader.
+        // The byte limit check provides an independent exit condition for oversized pages.
+        // Previously used `0..=` (inclusive) which allowed max+1 iterations — a subtle off-by-one
+        // that was masked by a redundant inner `line_count >= max` check. Fixed to be correct
+        // by construction: the for range IS the doc count guard. Belt without suspenders.
+        for _ in 0..self.max_batch_size_docs {
             let bytes_read = self.buf_reader.read_line(&mut line).await?;
             if bytes_read == 0 {
                 break;
@@ -168,10 +174,6 @@ impl Source for FileSource {
             line.clear();
 
             if total_bytes_read > self.max_batch_size_bytes {
-                break;
-            }
-
-            if line_count >= self.max_batch_size_docs {
                 break;
             }
         }
@@ -229,6 +231,131 @@ mod tests {
         assert!(
             result.is_err(),
             "FileSource::new should fail when the file doesn't exist — not silently pretend everything is fine"
+        );
+    }
+
+    /// 🧪 The PID Duplicate Detective: pump() with varying doc_count_hint values
+    /// reads EXACTLY N lines from an N-line file. No more, no less. No duplicates.
+    ///
+    /// 🧠 TRIBAL KNOWLEDGE: This test exists because the PID controller adaptively changes
+    /// doc_count_hint between pump() calls. The hypothesis was that varying batch sizes could
+    /// cause FileSource to re-read lines. BufReader is forward-only, so this should be
+    /// impossible — but "should be impossible" is the preamble to every postmortem.
+    ///
+    /// "Trust, but verify. Especially the BufReader." — Ronald Reagan, systems architect 🦆
+    #[tokio::test]
+    async fn the_one_where_pid_varying_hints_never_cause_duplicate_reads() {
+        use crate::backends::Source;
+        use std::io::Write;
+
+        // 📝 Create a temp file with exactly 1000 lines of valid JSON
+        let the_sacred_doc_count: usize = 1000;
+        let mut temp_file = tempfile::NamedTempFile::new()
+            .expect("💀 Couldn't create temp file — the filesystem has abandoned us");
+
+        for i in 0..the_sacred_doc_count {
+            writeln!(temp_file, r#"{{"geonameid":{},"name":"Place {}"}}"#, i, i)
+                .expect("💀 Write failed — the disk is full or the universe is unkind");
+        }
+        temp_file.flush().expect("💀 Flush failed");
+
+        let config = FileSourceConfig {
+            file_name: temp_file.path().to_string_lossy().to_string(),
+        };
+        // 🎛️ Initial batch size doesn't matter — pump() overrides it via doc_count_hint
+        let mut source = FileSource::new(config, 50 * 1024 * 1024, 500)
+            .await
+            .expect("💀 FileSource::new failed on a temp file that definitely exists");
+
+        // 🎲 Simulate PID oscillation: varying hints like a PID controller having a mood swing
+        // -- The PID giveth, and the PID taketh away. These hints simulate the full range
+        // -- of batch sizes the PID might request during a real migration.
+        let the_pid_mood_swings: Vec<usize> = vec![
+            100, 500, 50, 1000, 200, 10, 300, 5000, 1, 150, 800, 3, 10000,
+        ];
+        let mut the_grand_total_lines: usize = 0;
+        let mut the_pump_cycle = 0usize;
+
+        loop {
+            // 🎛️ Cycle through hint values — PID never repeats the same pattern twice
+            let the_hint = the_pid_mood_swings[the_pump_cycle % the_pid_mood_swings.len()];
+            the_pump_cycle += 1;
+
+            match source
+                .pump(the_hint)
+                .await
+                .expect("💀 pump() returned an error — BufReader has trust issues")
+            {
+                Some(page) => {
+                    // 📊 Count lines in the page — each non-empty line is one doc
+                    let lines_in_page = page.split('\n').filter(|l| !l.trim().is_empty()).count();
+                    the_grand_total_lines += lines_in_page;
+                }
+                None => break, // 🏁 EOF — the well is dry
+            }
+        }
+
+        // 🎯 THE ASSERTION THAT MATTERS: exactly 1000 lines, no duplicates, no losses
+        assert_eq!(
+            the_grand_total_lines, the_sacred_doc_count,
+            "🐛 FileSource with varying doc_count_hint read {} lines from a {}-line file. \
+             If this is MORE, lines were duplicated. If LESS, lines were lost. \
+             Either way, the PID detective has cracked the case.",
+            the_grand_total_lines, the_sacred_doc_count
+        );
+    }
+
+    /// 🧪 Large-scale PID stress test: 50,000 lines with aggressive PID oscillation.
+    /// The scale matters — small tests can hide off-by-one bugs that accumulate.
+    ///
+    /// "At scale, every off-by-one becomes an off-by-ten-thousand." — Ancient proverb 📜
+    /// "I'm in this picture and I don't like it" — the for loop in pump() 🦆
+    #[tokio::test]
+    async fn the_one_where_fifty_thousand_docs_survive_pid_chaos() {
+        use crate::backends::Source;
+        use std::io::Write;
+
+        let the_sacred_doc_count: usize = 50_000;
+        let mut temp_file = tempfile::NamedTempFile::new()
+            .expect("💀 Temp file creation failed — disk gremlins strike again");
+
+        for i in 0..the_sacred_doc_count {
+            writeln!(temp_file, r#"{{"id":{},"data":"test_doc_{}"}}"#, i, i)
+                .expect("💀 Write failed");
+        }
+        temp_file.flush().expect("💀 Flush failed");
+
+        let config = FileSourceConfig {
+            file_name: temp_file.path().to_string_lossy().to_string(),
+        };
+        let mut source = FileSource::new(config, 50 * 1024 * 1024, 1000)
+            .await
+            .expect("💀 FileSource::new failed");
+
+        // 🎲 Aggressive PID hints — including edge cases like 1 and max_doc_count
+        let the_pid_chaos_sequence: Vec<usize> = vec![
+            1, 2, 3, 5, 10, 50, 100, 500, 1000, 5000, 10000, 100, 1, 50000,
+        ];
+        let mut the_grand_total_lines: usize = 0;
+        let mut the_pump_cycle = 0usize;
+
+        loop {
+            let the_hint = the_pid_chaos_sequence[the_pump_cycle % the_pid_chaos_sequence.len()];
+            the_pump_cycle += 1;
+
+            match source.pump(the_hint).await.expect("💀 pump() error") {
+                Some(page) => {
+                    let lines = page.split('\n').filter(|l| !l.trim().is_empty()).count();
+                    the_grand_total_lines += lines;
+                }
+                None => break,
+            }
+        }
+
+        assert_eq!(
+            the_grand_total_lines, the_sacred_doc_count,
+            "🐛 50K doc stress test: read {} lines from {}-line file. The PID broke something.",
+            the_grand_total_lines, the_sacred_doc_count
         );
     }
 }

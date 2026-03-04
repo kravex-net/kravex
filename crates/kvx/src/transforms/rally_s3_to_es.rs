@@ -318,4 +318,90 @@ mod tests {
         );
         Ok(())
     }
+
+    /// 🧪 PID Duplicate Investigation: verify transform produces EXACTLY N items for N input lines.
+    /// Each item must contain EXACTLY one ES bulk operation (action\nsource = 2 lines).
+    ///
+    /// 🧠 TRIBAL KNOWLEDGE: geonames data has no ObjectID field, so the action line is
+    /// `{"index":{}}` (no _id). ES auto-generates IDs. This test uses geonames-like data
+    /// to match the exact benchmark scenario where 19.3M docs appeared from 11.4M lines.
+    ///
+    /// "The transform giveth action lines. The transform giveth source lines. The transform
+    ///  giveth EXACTLY as many as it receiveth." — Book of Bulk, chapter 1 🦆
+    #[test]
+    fn the_one_where_transform_never_duplicates_geonames_docs() -> Result<()> {
+        let the_sacred_doc_count = 100;
+        // 📝 Build a page of geonames-like JSON (no ObjectID — matches real geonames data)
+        let the_geonames_page: String = (0..the_sacred_doc_count)
+            .map(|i| {
+                serde_json::json!({
+                    "geonameid": i,
+                    "name": format!("Place {}", i),
+                    "asciiname": format!("Place {}", i),
+                    "latitude": 42.64991 + (i as f64 * 0.001),
+                    "longitude": 1.53335 + (i as f64 * 0.001),
+                    "country_code": "AD",
+                    "population": 0
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let the_items = RallyS3ToEs.transform(&the_geonames_page)?;
+
+        // 🎯 Exactly N items for N input lines — no duplication, no loss
+        assert_eq!(
+            the_items.len(),
+            the_sacred_doc_count,
+            "🐛 Transform produced {} items from {} input lines. Duplication detected!",
+            the_items.len(),
+            the_sacred_doc_count
+        );
+
+        // 📏 Each item must be exactly 2 lines (action\nsource) — one ES bulk operation
+        for (idx, item) in the_items.iter().enumerate() {
+            let the_line_count = item.as_ref().split('\n').count();
+            assert_eq!(
+                the_line_count, 2,
+                "🐛 Item {} has {} lines instead of 2 (action+source). Format violation!",
+                idx, the_line_count
+            );
+            // ✅ Action line should be {"index":{}} — no _id because geonames has no ObjectID
+            let the_action_line = item.as_ref().split('\n').next().unwrap();
+            assert_eq!(
+                the_action_line, r#"{"index":{}}"#,
+                "🐛 Item {} action line should have no _id for geonames data",
+                idx
+            );
+        }
+
+        Ok(())
+    }
+
+    /// 🧪 Transform at scale: 10,000 geonames-like docs through the transform pipeline.
+    /// If there's a subtle duplication bug, scale amplifies it.
+    ///
+    /// "One doc works. Ten docs work. Ten thousand docs... that's where the gremlins live."
+    /// — The Art of War, DevOps edition 📜🦆
+    #[test]
+    fn the_one_where_ten_thousand_geonames_docs_transform_without_multiplication() -> Result<()> {
+        let the_sacred_doc_count = 10_000;
+        let the_geonames_page: String = (0..the_sacred_doc_count)
+            .map(|i| serde_json::json!({"geonameid": i, "name": format!("P{}", i)}).to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let the_items = RallyS3ToEs.transform(&the_geonames_page)?;
+
+        assert_eq!(
+            the_items.len(),
+            the_sacred_doc_count,
+            "🐛 10K transform: produced {} items from {} input lines",
+            the_items.len(),
+            the_sacred_doc_count
+        );
+
+        Ok(())
+    }
 }
