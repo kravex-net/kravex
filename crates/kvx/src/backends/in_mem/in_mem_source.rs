@@ -12,6 +12,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::backends::Source;
+use crate::buffer_pool::PoolBuffer;
 
 /// 📦 The world's most optimistic data source — now page-aware! 📄
 ///
@@ -62,7 +63,7 @@ impl Source for InMemorySource {
     /// 🧠 Knowledge graph: the source joins its 4 docs with `\n` into one raw page.
     /// The Composer+Transformer downstream will split and process them.
     /// Source is ignorant. Source is bliss. Source is a faucet. 🚰
-    async fn pump(&mut self, _doc_count_hint: usize) -> Result<Option<String>> {
+    async fn pump(&mut self, _doc_count_hint: usize) -> Result<Option<PoolBuffer>> {
         if self.has_yielded {
             return Ok(None);
         }
@@ -80,6 +81,8 @@ impl Source for InMemorySource {
         ]
         .join("\n");
 
-        Ok(Some(the_sacred_page))
+        // 🏦 Wrap the sacred texts in a PoolBuffer. From<String> creates a non-pooled buffer
+        // since this is test data. In production sources, we rent from the pool for reuse. 🔄
+        Ok(Some(PoolBuffer::from(the_sacred_page)))
     }
 }

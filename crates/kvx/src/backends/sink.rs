@@ -12,6 +12,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::backends::{elasticsearch, file, in_mem, opensearch};
+use crate::buffer_pool::PoolBuffer;
 
 /// 🕳️ A sink that drains pre-rendered payloads — pure I/O, zero logic.
 ///
@@ -35,7 +36,10 @@ use crate::backends::{elasticsearch, file, in_mem, opensearch};
 #[async_trait]
 pub trait Sink: std::fmt::Debug {
     /// 🚰 Drain a fully rendered payload to the destination. I/O only. No questions asked.
-    async fn drain(&mut self, payload: String) -> Result<()>;
+    /// Accepts PoolBuffer — the bytes flow through managed memory from source to wire.
+    /// The sink OWNS the buffer and is responsible for returning it to the pool (via Drop)
+    /// or consuming it (via into_vec for reqwest body).
+    async fn drain(&mut self, payload: PoolBuffer) -> Result<()>;
     /// 🗑️ Flush, finalize, and release. Call this. Always. No exceptions. Not even on Fridays.
     async fn close(&mut self) -> Result<()>;
 }
@@ -59,8 +63,8 @@ pub(crate) enum SinkBackend {
 
 #[async_trait]
 impl Sink for SinkBackend {
-    async fn drain(&mut self, payload: String) -> Result<()> {
-        // -- 🚰 Four drains, one payload. The enum knows which drain. The payload doesn't care.
+    async fn drain(&mut self, payload: PoolBuffer) -> Result<()> {
+        // -- 🚰 Four drains, one PoolBuffer. The bytes have traveled far. Time to rest. 🏦
         match self {
             SinkBackend::InMemory(sink) => sink.drain(payload).await,
             SinkBackend::File(sink) => sink.drain(payload).await,

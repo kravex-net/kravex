@@ -19,6 +19,7 @@ indicatif = { workspace = true }
 comfy-table = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 aws-config = { workspace = true }
+base64 = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

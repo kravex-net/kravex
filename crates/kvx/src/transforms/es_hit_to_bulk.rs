@@ -25,6 +25,7 @@
 //! 🦆 The optimization duck quacks in O(memcpy) instead of O(parse+serialize).
 
 use super::Transform;
+use crate::buffer_pool::PoolBuffer;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -109,6 +110,31 @@ impl Transform for EsHitToBulk {
         }
         Ok(())
     }
+
+    /// 🏦 Pool buffer edition — zero per-doc allocations. The TODO from the past is now the present. 🚀
+    ///
+    /// 🧠 Writes action line + source directly into the output PoolBuffer via fmt::Write.
+    /// No intermediate String per document. No heap alloc. No heap free. Just vibes and memcpy.
+    /// At 10K docs/page, this saves 20K allocator calls (1 alloc + 1 free per doc, eliminated).
+    ///
+    /// The SearchHit struct lives on the stack (RawValue borrows from source_str).
+    /// The write!() macro formats directly into PoolBuffer via its fmt::Write impl.
+    /// The _source JSON body is push_str()'d — pure memcpy from source slice to output buffer.
+    /// "The allocator can finally rest. Not because it's lazy. Because we stopped bothering it." 🦆
+    #[inline]
+    fn transform_into_pool_buffer(&self, source: &PoolBuffer, output: &mut PoolBuffer) -> Result<()> {
+        let source_str = source.as_str().map_err(|e| {
+            anyhow::anyhow!("💀 Source buffer isn't valid UTF-8. The search hits are speaking in tongues. Error: {e}")
+        })?;
+        for line in source_str.split('\n') {
+            if line.trim().is_empty() {
+                continue;
+            }
+            write_hit_to_buffer(line, output)?;
+            output.push_byte(b'\n');
+        }
+        Ok(())
+    }
 }
 
 /// 🔧 Transform a single search hit JSON into bulk API format (action\nsource).
@@ -186,6 +212,68 @@ fn transform_single_hit(raw: &str) -> Result<String> {
     the_sacred_output.push_str(the_source_json);
 
     Ok(the_sacred_output)
+}
+
+/// 🔧 Write a single search hit directly into a PoolBuffer — zero per-doc allocations. 🚀
+///
+/// Same logic as `transform_single_hit()` but writes into the output buffer instead of
+/// returning a String. The write!() macro uses PoolBuffer's fmt::Write impl — formatting
+/// goes straight to the buffer's backing Vec<u8>. No intermediate String. No heap alloc.
+///
+/// ## Per-document allocation budget 💰
+/// - 1 `SearchHit` struct (2 pointers + discriminants — stack, ~32 bytes)
+/// - 0 `String` allocations (was: 1 pre-sized String per doc)
+/// - 0 `Value` nodes (same as before — RawValue borrows)
+/// - 0 heap operations total. The allocator is on vacation. 🏖️
+///
+/// "First we eliminated the Value tree. Then we eliminated the String. Next: eliminate gravity." 🦆
+#[inline]
+fn write_hit_to_buffer(raw: &str, output: &mut PoolBuffer) -> Result<()> {
+    // 🔬 Phase 1: Typed deserialize — borrows _id and _source as raw JSON slices.
+    let hit: SearchHit = serde_json::from_str(raw).context(
+        "💀 Search hit parse failed — the source emitted non-JSON. \
+         Either corrupted upstream or the pipeline sprang a leak. \
+         Check upstream. Call a plumber. File an insurance claim.",
+    )?;
+
+    // 📦 Phase 2: Grab _source — the raw JSON text, never parsed.
+    let the_source_json = hit
+        ._source
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "💀 Search hit missing '_source'. A hit without a body. \
+                 Like a burrito without filling. Like a commit without a diff. \
+                 Like a Monday without coffee. The hit was: {}",
+                raw
+            )
+        })?
+        .get();
+
+    // 📡 Phase 3: Action line — write!() goes directly into PoolBuffer via fmt::Write.
+    // No intermediate String. The bytes land in managed memory on the first write.
+    match hit._id {
+        Some(raw_id) => {
+            let id_json = raw_id.get();
+            if id_json == "null" {
+                output.push_str(r#"{"index":{}}"#);
+            } else if id_json.starts_with('"') {
+                // 📋 String _id — already quoted + escaped. Hot path. Zero escaping. 🔥
+                write!(output, r#"{{"index":{{"_id":{id_json}}}}}"#).unwrap();
+            } else {
+                // 🔢 Numeric or exotic _id — wrap in quotes for the bulk action line.
+                write!(output, r#"{{"index":{{"_id":"{id_json}"}}}}"#).unwrap();
+            }
+        }
+        None => {
+            output.push_str(r#"{"index":{}}"#);
+        }
+    }
+
+    // 🎯 Phase 4: Newline separator + source body — pure memcpy into PoolBuffer.
+    output.push_byte(b'\n');
+    output.push_str(the_source_json);
+
+    Ok(())
 }
 
 #[cfg(test)]

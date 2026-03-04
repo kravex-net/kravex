@@ -50,6 +50,10 @@ pub struct RuntimeConfig {
     /// 🧵 How many sink workers run in parallel — more lanes, more throughput, more debugging
     #[serde(default = "default_sink_parallelism", alias = "num_sink_workers")]
     pub sink_parallelism: usize,
+    /// 🧠 How many transform workers crunch bytes in parallel — CPU-bound stage between source and sink.
+    /// Defaults to `num_cpus - 1` because one core stays home to babysit the tokio runtime. 🏠
+    #[serde(default = "default_transform_parallelism")]
+    pub transform_parallelism: usize,
 }
 
 impl Default for RuntimeConfig {
@@ -57,6 +61,7 @@ impl Default for RuntimeConfig {
         Self {
             queue_capacity: default_queue_capacity(),
             sink_parallelism: default_sink_parallelism(),
+            transform_parallelism: default_transform_parallelism(),
         }
     }
 }
@@ -71,6 +76,16 @@ fn default_queue_capacity() -> usize {
 // -- Ancient proverb: he who spawns eight writers before breakfast, debugs until dinner.
 fn default_sink_parallelism() -> usize {
     1
+}
+
+// 🧠 CPU cores minus 1: the last core stays behind to keep the async runtime alive.
+// -- "The borrow checker took my cores. The OS took the rest. This is what's left." — Me, 3am 💀
+// Uses std::thread::available_parallelism() (stable since Rust 1.59, no external crate needed).
+// Falls back to 1 if the OS refuses to tell us how many cores we have (containers, weird VMs, the matrix).
+pub fn default_transform_parallelism() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get().saturating_sub(1).max(1))
+        .unwrap_or(1)
 }
 
 // 🧠 SourceConfig and SinkConfig now live in their own submodules:

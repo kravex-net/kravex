@@ -26,6 +26,7 @@ use serde::Deserialize;
 use tracing::{debug, trace};
 
 use crate::backends::Sink;
+use crate::buffer_pool::PoolBuffer;
 
 // ⚠️ Per-doc index routing: each document's `_index` field in the NDJSON action line overrides this config.
 // This means a single sink can write to multiple indices if your source data is spicy enough.
@@ -65,10 +66,19 @@ pub struct ElasticsearchSinkConfig {
 /// 🚰 Think of this as the drain at the end of a data pipeline. The last stop.
 /// Knock knock. Who's there? HTTP POST. HTTP POST who? HTTP POST your NDJSON
 /// and hope the cluster's in a good mood.
+/// 📡 The sink side of the Elasticsearch backend — pure I/O, zero buffering.
+///
+/// 🧠 Performance: `the_precomputed_bulk_url` and `the_precomputed_auth_header` are
+/// computed once in `new()` and reused for every bulk request. This eliminates 2
+/// `format!()` String allocations per request on the hot path. At 64 workers × thousands
+/// of requests, that's millions of avoided allocations. "He who allocates per-request,
+/// GCs in production." — Ancient JVM proverb (we're in Rust but the wisdom still applies) 🦆
 #[derive(Debug)]
 pub(crate) struct ElasticsearchSink {
     client: reqwest::Client,
-    sink_config: ElasticsearchSinkConfig,
+    // 🔒 Auth + URL pre-computed at init. No per-request format!() overhead.
+    the_precomputed_bulk_url: String,
+    the_precomputed_auth_header: Option<reqwest::header::HeaderValue>,
 }
 
 #[async_trait]
@@ -78,12 +88,14 @@ impl Sink for ElasticsearchSink {
     /// The SinkWorker upstream already transformed each doc and binary-collected them into
     /// a single NDJSON payload string. We just fire it into the elastic void.
     /// "In a world where sinks had too many responsibilities... one refactor dared to simplify."
-    async fn drain(&mut self, payload: String) -> Result<()> {
+    async fn drain(&mut self, payload: PoolBuffer) -> Result<()> {
         debug!(
             "🚰 Draining {} bytes to /_bulk — the payload has left the building, Elvis-style",
             payload.len()
         );
-        self.submit_bulk_request(payload).await
+        // 🏦 Convert PoolBuffer → Vec<u8> for reqwest body. One-way trip — buffer is consumed.
+        // reqwest::Body accepts Vec<u8> via Into<Body>, zero-copy ownership transfer. 🚀
+        self.submit_bulk_request(payload.into_vec()).await
             .context("💀 The bulk submission stumbled at the finish line. The NDJSON was rendered with love, the SinkWorker did its job, and the HTTP layer said 'nah.' Check connectivity. Check your cluster. Check your horoscope.")?;
         Ok(())
     }
@@ -123,6 +135,8 @@ impl ElasticsearchSink {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
+            .tcp_nodelay(true) // 🚀 Disable Nagle's algorithm — send bulk payloads immediately, not in sad little 40ms chunks
+            .pool_idle_timeout(Duration::from_secs(30)) // 🔄 Keep warm connections alive for 30s — reuse > reconnect
             .build()
             // -- 💀 "Failed to initialize http client" — a tragedy in one act.
             // -- The curtain rises. reqwest::Client::builder() enters, full of promise.
@@ -184,10 +198,48 @@ impl ElasticsearchSink {
             }
         }
 
-        // 🚀 All checks passed. No buffer to init — we're I/O-only now. Clean. Light. Free.
+        // 🚀 Pre-compute the bulk URL — one format!() at init instead of per-request.
+        // "Premature optimization is the root of all evil, but this one is just punctual." 🦆
+        let the_base_trimmed = config.url.trim_end_matches('/');
+        let the_precomputed_bulk_url = match config.index {
+            Some(ref index_name) => format!(
+                "{}/{}/_bulk?filter_path=items.*.error",
+                the_base_trimmed, index_name
+            ),
+            None => format!(
+                "{}/_bulk?filter_path=items.*.error",
+                the_base_trimmed
+            ),
+        };
+
+        // 🔒 Pre-compute auth header — one allocation at init, zero per-request.
+        // API key > basic auth > none. Same precedence everywhere. Consistency is a feature.
+        let the_precomputed_auth_header = if let Some(ref api_key) = config.api_key {
+            Some(
+                reqwest::header::HeaderValue::from_str(&format!("ApiKey {}", api_key))
+                    .context("💀 API key contains invalid header characters — what did you put in there?")?,
+            )
+        } else if let (Some(username), password) = (&config.username, &config.password) {
+            // 🔒 Basic auth header: base64("username:password")
+            use base64::Engine;
+            let credentials = match password {
+                Some(p) => format!("{}:{}", username, p),
+                None => format!("{}:", username),
+            };
+            let encoded = base64::engine::general_purpose::STANDARD.encode(credentials);
+            Some(
+                reqwest::header::HeaderValue::from_str(&format!("Basic {}", encoded))
+                    .context("💀 Basic auth credentials contain invalid header characters")?,
+            )
+        } else {
+            None
+        };
+
+        // 🚀 All checks passed. URL and auth pre-baked. Zero per-request overhead. Clean. Light. Free.
         Ok(Self {
-            sink_config: config,
             client,
+            the_precomputed_bulk_url,
+            the_precomputed_auth_header,
         })
     }
 
@@ -200,41 +252,25 @@ impl ElasticsearchSink {
     /// If the response is not 2xx, we bail with enough detail to file a reasonable postmortem.
     ///
     /// 🔄 This function does not retry. Retries are the caller's problem. Good luck.
-    async fn submit_bulk_request(&self, request_body: String) -> Result<()> {
-        // -- 📡 Build the bulk endpoint URL. The `_bulk` API: Elasticsearch's loading dock.
-        // -- NDJSON only — no JSON arrays, no XML, no CSV, no hand-coded tab-separated values.
-        // -- NDJSON. The only format Elasticsearch respects. Truly the format of people who
-        // -- wanted JSON but also wanted to feel slightly superior about it.
-        // 📡 ES 8.x requires the index either in the action line OR the URL path.
-        // RallyS3ToEs transform emits `{"index":{}}` without `_index`, so we route via URL.
-        // When no index is configured (per-doc routing), fall back to the bare `/_bulk` endpoint.
-        // 🧠 TRIBAL KNOWLEDGE: Without index in URL, ES 8.x returns 400 for every doc and
-        // kravex hangs at 0% progress. This was Bug 6 from the benchmark session.
-        let the_base_url_trimmed_like_a_fresh_haircut = self.sink_config.url.trim_end_matches('/');
-        // 🚀 filter_path=items.*.error tells ES to return ONLY error details for failed items.
-        // On success: empty `{}`. On failure: just the error objects, not full per-item bloat.
-        let bulk_url = match self.sink_config.index {
-            Some(ref index_name) => format!(
-                "{}/{}/_bulk?filter_path=items.*.error",
-                the_base_url_trimmed_like_a_fresh_haircut, index_name
-            ),
-            None => format!(
-                "{}/_bulk?filter_path=items.*.error",
-                the_base_url_trimmed_like_a_fresh_haircut
-            ),
-        };
+    /// 📡 Fires a `_bulk` POST with pre-computed URL + auth. Zero per-request allocations.
+    ///
+    /// 🧠 Performance path: URL and auth header are pre-computed in new().
+    /// Content-length check on response: with filter_path=items.*.error, ES returns `{}`
+    /// (2 bytes) on success. If content_length <= 2, we skip the async body read entirely.
+    /// This avoids an unnecessary copy of potentially large response buffers on the hot path.
+    ///
+    /// "He who reads response bodies he doesn't need, deserializes in vain." — Ancient REST proverb 🦆
+    async fn submit_bulk_request(&self, request_body: Vec<u8>) -> Result<()> {
+        // 🚀 Build request with pre-computed URL + auth — zero format!() on hot path
         let mut request = self
             .client
-            .post(&bulk_url)
+            .post(&self.the_precomputed_bulk_url)
             // ⚠️ Content-Type: application/x-ndjson — not application/json. VERY important.
-            // Elasticsearch will return a 406 or silently misbehave without this header.
             .header("Content-Type", "application/x-ndjson");
 
-        // 🔒 Auth priority: API key > basic auth — consistent across index check + bulk POST
-        if let Some(ref api_key) = self.sink_config.api_key {
-            request = request.header("Authorization", format!("ApiKey {}", api_key));
-        } else if let Some(ref username) = self.sink_config.username {
-            request = request.basic_auth(username, self.sink_config.password.as_ref());
+        // 🔒 Apply pre-computed auth header — no per-request format!() or base64 encoding
+        if let Some(ref auth_header) = self.the_precomputed_auth_header {
+            request = request.header("Authorization", auth_header.clone());
         }
 
         let response = request
@@ -254,13 +290,21 @@ impl ElasticsearchSink {
             );
         }
 
-        // 📡 With filter_path=items.*.error, ES returns `{}` when all items succeed (2 bytes!)
-        // and only error details when items fail. No per-item _id/_version/_shards bloat.
-        // 🧠 TRIBAL KNOWLEDGE: Full response body parsing caused a 30x performance regression
-        // (308 docs/s → 10k+). The fix: let the server filter, not the client.
-        // 🧠 TRIBAL KNOWLEDGE: This check catches the root cause of the 19.3M-from-11.4M anomaly —
-        // item-level 429s/mapping errors were silently swallowed. Combined with auto-generated
-        // _ids (geonames has no ObjectID), re-indexing created NEW docs instead of upserts.
+        // 📡 With filter_path=items.*.error, ES returns `{}` on success (2 bytes).
+        // Skip the async body read when content-length tells us there's nothing to check.
+        // 🧠 TRIBAL KNOWLEDGE: Full response body parsing caused a 30x performance regression.
+        // 🧠 TRIBAL KNOWLEDGE: This check catches the 19.3M-from-11.4M anomaly —
+        // item-level 429s/mapping errors were silently swallowed.
+        let content_length = response.content_length();
+        if let Some(len) = content_length {
+            if len <= 2 {
+                // ✅ Empty success `{}` — skip body read, save an async syscall + alloc
+                trace!("🚀 Bulk request landed — content-length={}, skipping body read", len);
+                return Ok(());
+            }
+        }
+
+        // ⚠️ Content-length suggests errors exist (or was absent) — read and check
         let body = response.text().await.unwrap_or_default();
         if body.contains("\"error\"") {
             anyhow::bail!(

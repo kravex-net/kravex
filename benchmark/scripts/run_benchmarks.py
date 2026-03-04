@@ -120,6 +120,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--engine", help="Run only this engine (elasticsearch, opensearch)")
     parser.add_argument("--skip-esrally", action="store_true", help="Skip esrally benchmark runs")
     parser.add_argument("--skip-elasticdump", action="store_true", help="Skip elasticdump benchmark runs")
+    parser.add_argument("--skip-python", action="store_true", help="Skip naive Python benchmark runs")
     return parser.parse_args()
 
 
@@ -437,6 +438,50 @@ def run_elasticdump(
     )
 
 
+def run_python(
+    dataset: str,
+    target_url: str,
+    expected_docs: int,
+    engine: str,
+    strip_rally: bool = False,
+):
+    """
+    Run the naive Python migration script — the control group.
+    'In a world where Rust was fast... Python dared to try. And lost. Gracefully.'
+    """
+    input_file = DATA_DIR / f"{dataset}.json"
+    if not input_file.exists():
+        log_error(f"Input file not found: {input_file}")
+        return None
+
+    index_name = f"benchmark_{dataset}"
+
+    reset_index(target_url, index_name)
+
+    cmd = [
+        sys.executable, str(SCRIPT_DIR / "python_migrate.py"),
+        f"--input={input_file}",
+        f"--url={target_url}",
+        f"--index={index_name}",
+        "--batch-mb=10",
+        "--workers=8",
+        "--progress-sec=5",
+    ]
+    if strip_rally:
+        cmd.append("--strip-rally")
+
+    return run_tool_with_metrics(
+        cmd=cmd,
+        tool_label="python-naive",
+        dataset=dataset,
+        engine=engine,
+        expected_docs=expected_docs,
+        cluster_url=target_url,
+        index_name=index_name,
+        log_prefix="run_python",
+    )
+
+
 # ============================================================================
 #  🔄 Orchestration — the nested loop of destiny
 # ============================================================================
@@ -462,6 +507,7 @@ def run_dataset_engine(
     os_url: str,
     skip_esrally: bool,
     skip_elasticdump: bool,
+    skip_python: bool = False,
 ):
     """
     Run all 3 tools for a single dataset × engine pair (file-based ingest).
@@ -489,10 +535,17 @@ def run_dataset_engine(
 
     # -- 3. elasticdump
     if not skip_elasticdump:
-        log_info("--- Tool 3/3: elasticdump ---")
+        log_info("--- Tool 3/4: elasticdump ---")
         run_elasticdump(dataset, cluster_url, expected_docs, engine)
     else:
         log_warn(f"Skipping elasticdump for {dataset}/{engine} (--skip-elasticdump)")
+
+    # -- 4. python-naive — the control group 🐍
+    if not skip_python:
+        log_info("--- Tool 4/4: python-naive ---")
+        run_python(dataset, cluster_url, expected_docs, engine)
+    else:
+        log_warn(f"Skipping python for {dataset}/{engine} (--skip-python)")
 
     log_info(f"Completed all tools for {dataset} × {engine} ✅")
 
@@ -504,6 +557,7 @@ def run_geonames_migration(
     os_url: str,
     skip_esrally: bool,
     skip_elasticdump: bool,
+    skip_python: bool = False,
 ):
     """
     🔄 Geonames migration flow: esrally seeds ES, kravex migrates ES → OS.
@@ -569,6 +623,13 @@ def run_geonames_migration(
         run_elasticdump("geonames", es_url, expected_docs, "elasticsearch")
     else:
         log_warn("Skipping elasticdump for geonames (--skip-elasticdump)")
+
+    # -- 🐍 Step 4: Python naive baseline (file → ES) — the control group
+    if not skip_python:
+        log_info("--- Step 4: python-naive baseline (file → ES) ---")
+        run_python("geonames", es_url, expected_docs, "elasticsearch")
+    else:
+        log_warn("Skipping python for geonames (--skip-python)")
 
     log_info("Completed geonames migration flow ✅")
 
@@ -697,6 +758,7 @@ def main():
                 os_url=os_url,
                 skip_esrally=args.skip_esrally,
                 skip_elasticdump=args.skip_elasticdump,
+                skip_python=args.skip_python,
             )
             continue
 
@@ -715,6 +777,7 @@ def main():
                 os_url=os_url,
                 skip_esrally=args.skip_esrally,
                 skip_elasticdump=args.skip_elasticdump,
+                skip_python=args.skip_python,
             )
 
     # -- 📊 Summary

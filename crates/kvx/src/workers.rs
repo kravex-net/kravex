@@ -22,6 +22,8 @@ pub(crate) mod sink_worker;
 pub(crate) use sink_worker::SinkWorker;
 pub(crate) mod source_worker;
 pub(crate) use source_worker::SourceWorker;
+pub(crate) mod transform_worker;
+pub(crate) use transform_worker::TransformWorker;
 
 /// 🏗️ A background worker — the async task that actually moves data while the Supervisor
 /// takes credit in the sprint retro. Implement this trait to join the labor force.

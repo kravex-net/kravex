@@ -32,12 +32,119 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_json::value::RawValue;
 use serde_json::Value;
+use std::fmt::Write;
 use std::time::Duration;
 use tracing::{debug, info, trace};
 
 use crate::backends::Source;
+use crate::buffer_pool;
 use crate::progress::ProgressMetrics;
+
+// 🧠 Zero-copy deserialization structs for search responses.
+// Same pattern as elasticsearch_source.rs — RawValue borrows from response_text,
+// no intermediate Value tree. Eliminates N × json!() + to_string() per page.
+// If you're reading this in both files: yes, we duplicated. No, we won't abstract.
+// Two backends, two files, two copies. The borrow checker prefers explicit over clever.
+
+/// 📦 Pre-computed search result — everything pump() needs, ready to go.
+/// "Pre-computation: because the async executor has better things to do." — Ancient Tokio Proverb
+pub(crate) struct ParsedSearchResult {
+    /// 📄 Pre-joined NDJSON page — one line per hit, no trailing newline
+    pub page: String,
+    /// 📊 Total bytes across all hit lines
+    pub page_bytes: usize,
+    /// 📊 Number of documents in this page
+    pub doc_count: usize,
+    /// 🔖 Refreshed PIT ID (OS may rotate it)
+    pub new_pit_id: Option<String>,
+    /// 🔄 Sort values from the last hit — becomes the next search_after cursor
+    pub new_search_after: Option<Vec<Value>>,
+}
+
+/// 📡 Typed search response — borrows strings via RawValue, zero-copy life.
+#[derive(Deserialize)]
+struct SearchResponse<'a> {
+    #[serde(default)]
+    pit_id: Option<&'a str>,
+    hits: SearchResponseHits<'a>,
+}
+
+/// 📦 The hits wrapper — OpenSearch also nests hits inside hits. Tradition.
+#[derive(Deserialize)]
+struct SearchResponseHits<'a> {
+    #[serde(borrow)]
+    hits: Vec<SearchResponseHit<'a>>,
+}
+
+/// 📄 A single hit — _id and _source as RawValue (zero-copy JSON slices).
+#[derive(Deserialize)]
+struct SearchResponseHit<'a> {
+    #[serde(borrow)]
+    _id: Option<&'a RawValue>,
+    _index: Option<&'a str>,
+    #[serde(borrow)]
+    _source: Option<&'a RawValue>,
+    sort: Option<Vec<Value>>,
+}
+
+/// 🧵 Parse search response JSON — CPU work offloaded from tokio via spawn_blocking.
+/// write!() directly into a pre-sized String page buffer. No Vec<String> + join.
+/// "One buffer to rule them all, one write!() to fill them." — Lord of the Allocations
+fn parse_search_response(response_text: &str) -> Result<Option<ParsedSearchResult>> {
+    let response: SearchResponse<'_> = serde_json::from_str(response_text)
+        .context("💀 Search response was not valid JSON. The cluster is having a bad day.")?;
+
+    let hits = &response.hits.hits;
+
+    if hits.is_empty() {
+        return Ok(None);
+    }
+
+    // 🏗️ Pre-size: ~200 bytes per doc estimate
+    let mut page = String::with_capacity(hits.len() * 200);
+    let mut total_bytes = 0usize;
+
+    for (i, hit) in hits.iter().enumerate() {
+        if i > 0 {
+            page.push('\n');
+        }
+
+        let the_mark_before_writing = page.len();
+
+        // -- 🎬 "Write it all into one buffer. Like a confession, but faster." — Every parser ever
+        page.push_str(r#"{"_id":"#);
+        match hit._id {
+            Some(raw_id) => page.push_str(raw_id.get()),
+            None => page.push_str("null"),
+        }
+        page.push_str(r#","_index":"#);
+        match hit._index {
+            Some(idx) => write!(page, "\"{}\"", idx).unwrap(),
+            None => page.push_str("null"),
+        }
+        page.push_str(r#","_source":"#);
+        match &hit._source {
+            Some(raw_src) => page.push_str(raw_src.get()),
+            None => page.push_str("null"),
+        }
+        page.push('}');
+
+        total_bytes += page.len() - the_mark_before_writing;
+    }
+
+    let new_search_after = hits.last().and_then(|h| h.sort.clone());
+    let new_pit_id = response.pit_id.map(|s| s.to_string());
+
+    Ok(Some(ParsedSearchResult {
+        page,
+        page_bytes: total_bytes,
+        doc_count: hits.len(),
+        new_pit_id,
+        new_search_after,
+    }))
+}
 
 // 🔧 OpenSearch source config — what index, what cluster, how to authenticate, how big are pages.
 //
@@ -140,7 +247,7 @@ impl Source for OpenSearchSource {
     ///
     /// ## EOF detection
     /// When the search returns zero hits, we're done. PIT gets deleted.
-    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<String>> {
+    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<buffer_pool::PoolBuffer>> {
         // 🏁 Short-circuit if we already know we're done
         if self.exhausted {
             return Ok(None);
@@ -151,32 +258,39 @@ impl Source for OpenSearchSource {
             self.open_pit().await?;
         }
 
-        // 📡 Execute search with PIT + search_after
-        let (hits, page_bytes) = self.execute_search(doc_count_hint).await?;
+        // 📡 Execute search + parse (HTTP async, JSON parsing on spawn_blocking)
+        let parsed = self.execute_search(doc_count_hint).await?;
 
-        if hits.is_empty() {
-            // 🏁 EOF — no more documents. Clean up the PIT. Wave goodbye.
-            debug!("🏁 OpenSearch source exhausted — zero hits returned, closing PIT");
-            self.cleanup_pit().await;
-            self.exhausted = true;
-            self.progress.finish();
-            return Ok(None);
+        match parsed {
+            None => {
+                // 🏁 EOF — no more documents. Clean up the PIT. Wave goodbye.
+                debug!("🏁 OpenSearch source exhausted — zero hits returned, closing PIT");
+                self.cleanup_pit().await;
+                self.exhausted = true;
+                self.progress.finish();
+                Ok(None)
+            }
+            Some(result) => {
+                // 📊 Update progress + pagination state
+                self.progress
+                    .update(result.page_bytes as u64, result.doc_count as u64);
+
+                if let Some(pit_id) = result.new_pit_id {
+                    self.pit_id = Some(pit_id);
+                }
+                self.search_after = result.new_search_after;
+
+                trace!(
+                    "📄 OpenSearch source page: {} docs, {} bytes — zero-copy parsed, the faucet flows faster",
+                    result.doc_count,
+                    result.page.len()
+                );
+
+                // 🏦 Adopt the pre-joined NDJSON page into the buffer pool.
+                // rent_from_string takes ownership — zero copy, just bucket assignment.
+                Ok(Some(buffer_pool::rent_from_string(result.page)))
+            }
         }
-
-        // 📊 Update progress with this batch
-        let docs_count = hits.len() as u64;
-        self.progress.update(page_bytes as u64, docs_count);
-
-        // 🔄 Build the NDJSON page from hits
-        let page = hits.join("\n");
-
-        trace!(
-            "📄 OpenSearch source page: {} docs, {} bytes — the faucet flows",
-            docs_count,
-            page.len()
-        );
-
-        Ok(Some(page))
     }
 }
 
@@ -271,20 +385,23 @@ impl OpenSearchSource {
         Ok(())
     }
 
-    /// 📡 Execute a search request with PIT + search_after pagination.
+    /// 📡 Execute search: HTTP stays async, JSON parsing offloaded to spawn_blocking.
     ///
-    /// Returns: (Vec<String>, usize) — (NDJSON lines for each hit, total bytes in page)
+    /// Phase split: (1) build request body, (2) send/receive HTTP, (3) parse on blocking thread.
+    /// At batch_size=10K, the parse phase was burning 10K json!() + to_string() cycles inline
+    /// on the tokio executor. Now it runs on a dedicated thread with zero-copy RawValue deserialization.
     ///
-    /// Each hit line: `{"_id":"abc","_index":"src-idx","_source":{...}}`
-    /// The _id and _index are preserved so downstream transforms can build
-    /// bulk action lines with proper document identity routing.
-    async fn execute_search(&mut self, batch_size: usize) -> Result<(Vec<String>, usize)> {
+    /// Returns None when hits are empty (EOF signal for pump).
+    async fn execute_search(
+        &mut self,
+        batch_size: usize,
+    ) -> Result<Option<ParsedSearchResult>> {
         let search_url = format!("{}/_search", self.config.url.trim_end_matches('/'));
 
-        // 🏗️ Build the search body
+        // 🏗️ Build the search body — trivial CPU, stays on async thread
         let query = match &self.config.query {
             Some(q) => serde_json::from_str(q).context(
-                "💀 The query filter is not valid JSON. You passed a query string that serde couldn't parse. Check your JSON syntax. We believe in you.",
+                "💀 The query filter is not valid JSON. Check your JSON syntax. We believe in you.",
             )?,
             None => serde_json::json!({"match_all": {}}),
         };
@@ -296,7 +413,7 @@ impl OpenSearchSource {
             "_source": true
         });
 
-        // 🔖 Add PIT to the search body
+        // 🔖 Add PIT
         if let Some(ref pit_id) = self.pit_id {
             search_body["pit"] = serde_json::json!({
                 "id": pit_id,
@@ -304,7 +421,7 @@ impl OpenSearchSource {
             });
         }
 
-        // 🔄 Add search_after cursor if we have one (not first page)
+        // 🔄 Add search_after cursor
         if let Some(ref cursor) = self.search_after {
             search_body["search_after"] = Value::Array(cursor.clone());
         }
@@ -312,6 +429,7 @@ impl OpenSearchSource {
         let search_body_str = serde_json::to_string(&search_body)
             .context("💀 Failed to serialize search body. The JSON gods are not pleased.")?;
 
+        // 📡 HTTP send + receive — async, where it belongs
         let mut request = self
             .client
             .post(&search_url)
@@ -322,12 +440,12 @@ impl OpenSearchSource {
         let response = request
             .send()
             .await
-            .context("💀 Search request failed. The network dropped our carefully crafted query into the void. Check connectivity and try again.")?;
+            .context("💀 Search request failed. The network dropped our query into the void.")?;
 
         if !response.status().is_success() {
             let err_body = response.text().await.unwrap_or_default();
             anyhow::bail!(
-                "💀 Search request failed. OpenSearch responded with: '{}'. Check your query, index name, and cluster health.",
+                "💀 Search failed. OpenSearch responded with: '{}'. Check query, index, and cluster health.",
                 err_body
             );
         }
@@ -336,56 +454,14 @@ impl OpenSearchSource {
             .text()
             .await
             .context("💀 Search response body could not be read.")?;
-        let body: Value = serde_json::from_str(&response_text)
-            .context("💀 Search response was not valid JSON. The cluster is having a bad day.")?;
 
-        // 🔖 Update PIT ID (it may be refreshed in the response)
-        if let Some(new_pit_id) = body["pit_id"].as_str() {
-            self.pit_id = Some(new_pit_id.to_string());
-        }
+        // 🧵 Offload CPU-heavy JSON parsing to a blocking thread.
+        // At 10K docs, this is 10K deserialize+write cycles — too much for tokio's event loop.
+        let parsed = tokio::task::spawn_blocking(move || parse_search_response(&response_text))
+            .await
+            .context("💀 spawn_blocking panicked during search response parsing. The thread had trust issues.")??;
 
-        // 📦 Extract hits
-        let hits = body["hits"]["hits"].as_array().ok_or_else(|| {
-            anyhow::anyhow!(
-                "💀 Search response missing hits.hits array. Response: {}",
-                body
-            )
-        })?;
-
-        if hits.is_empty() {
-            return Ok((Vec::new(), 0));
-        }
-
-        // 🔄 Update search_after cursor from the last hit's sort values
-        if let Some(sort_values) = hits.last().and_then(|h| h["sort"].as_array()) {
-            self.search_after = Some(sort_values.clone());
-        }
-
-        // 📄 Build NDJSON lines — each line preserves _id, _index, _source
-        let mut lines = Vec::with_capacity(hits.len());
-        let mut total_bytes = 0usize;
-
-        for hit in hits {
-            // 🏗️ Build a compact hit object with just the fields we need
-            let hit_line = serde_json::json!({
-                "_id": hit["_id"],
-                "_index": hit["_index"],
-                "_source": hit["_source"]
-            });
-            let line = serde_json::to_string(&hit_line).context(
-                "💀 Failed to serialize hit. The document came out of OpenSearch but couldn't go back into JSON. Ironic.",
-            )?;
-            total_bytes += line.len();
-            lines.push(line);
-        }
-
-        trace!(
-            "📡 Search returned {} hits, {} bytes — the well is not yet dry",
-            lines.len(),
-            total_bytes
-        );
-
-        Ok((lines, total_bytes))
+        Ok(parsed)
     }
 
     /// 🗑️ Clean up the PIT — delete the point-in-time snapshot.
@@ -487,5 +563,108 @@ mod tests {
             config.query.is_none(),
             "No query = match_all, the firehose approach"
         );
+    }
+
+    /// 🧪 parse_search_response extracts pit_id, hits, search_after.
+    /// "We parsed it. We parsed it all. And we didn't even need serde_json::Value."
+    /// — Zero-Copy Confessions, Volume 1 🦆
+    #[test]
+    fn the_one_where_parse_search_response_extracts_all_fields() {
+        let response_json = r#"{
+            "pit_id": "os_pit_xyz789",
+            "hits": {
+                "total": {"value": 100, "relation": "eq"},
+                "hits": [
+                    {
+                        "_id": "os-doc1",
+                        "_index": "source-index",
+                        "_source": {"city": "Portland", "temp": 72},
+                        "sort": [10]
+                    },
+                    {
+                        "_id": "os-doc2",
+                        "_index": "source-index",
+                        "_source": {"city": "Seattle", "temp": 55},
+                        "sort": [20]
+                    },
+                    {
+                        "_id": "os-doc3",
+                        "_index": "source-index",
+                        "_source": {"city": "Vancouver", "temp": 48},
+                        "sort": [30]
+                    }
+                ]
+            }
+        }"#;
+
+        let result = parse_search_response(response_json)
+            .expect("💀 Parse failed")
+            .expect("💀 Got None but hits were present");
+
+        assert_eq!(result.doc_count, 3);
+        assert_eq!(result.new_pit_id.as_deref(), Some("os_pit_xyz789"));
+        assert!(result.new_search_after.is_some());
+        // 🔄 search_after should be from the LAST hit's sort
+        assert_eq!(result.new_search_after.unwrap()[0], 30);
+
+        // 📄 3 NDJSON lines
+        let lines: Vec<&str> = result.page.split('\n').collect();
+        assert_eq!(lines.len(), 3);
+
+        // 🔍 First line should contain Portland
+        assert!(
+            lines[0].contains("Portland"),
+            "First hit should be Portland"
+        );
+        // 🔍 Last line should contain Vancouver
+        assert!(
+            lines[2].contains("Vancouver"),
+            "Last hit should be Vancouver"
+        );
+    }
+
+    /// 🧪 RawValue preserves nested _source verbatim — no parsing, no re-ordering.
+    /// The _source travels through like a diplomatic pouch: unopened, untouched, unquestioned. 🏃
+    #[test]
+    fn the_one_where_raw_value_borrows_source_without_parsing() {
+        let response_json = r#"{
+            "hits": {
+                "hits": [
+                    {
+                        "_id": "nested-doc",
+                        "_index": "deep-index",
+                        "_source": {"a": {"b": {"c": [true, false, null]}}},
+                        "sort": [42]
+                    }
+                ]
+            }
+        }"#;
+
+        let result = parse_search_response(response_json)
+            .expect("💀 Parse failed")
+            .expect("💀 Got None");
+
+        let parsed: Value =
+            serde_json::from_str(&result.page).expect("💀 Page is not valid JSON");
+        assert_eq!(parsed["_source"]["a"]["b"]["c"][0], true);
+        assert_eq!(parsed["_source"]["a"]["b"]["c"][2], Value::Null);
+        assert!(result.new_pit_id.is_none());
+    }
+
+    /// 🧪 Empty hits → None. The well is dry. The faucet is off. Go home.
+    #[test]
+    fn the_one_where_empty_hits_returns_none() {
+        let response_json = r#"{
+            "pit_id": "still_alive_pit",
+            "hits": {
+                "total": {"value": 0, "relation": "eq"},
+                "hits": []
+            }
+        }"#;
+
+        let result = parse_search_response(response_json)
+            .expect("💀 Parse failed on empty response");
+
+        assert!(result.is_none(), "📭 Empty hits = None, not empty page");
     }
 }

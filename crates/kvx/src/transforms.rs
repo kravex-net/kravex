@@ -51,10 +51,12 @@
 //! And we'll say "yes, but the branch predictor makes it free. Checkmate, AGI." 🦆
 
 use crate::app_config::{SinkConfig, SourceConfig};
+use crate::buffer_pool::PoolBuffer;
 use anyhow::Result;
 use std::borrow::Cow;
 
 pub(crate) mod es_hit_to_bulk;
+pub(crate) mod ndjson_to_bulk;
 pub(crate) mod passthrough;
 pub(crate) mod rally_s3_to_es;
 
@@ -99,14 +101,26 @@ pub fn supported_flows() -> Vec<FlowDescriptor> {
         FlowDescriptor {
             source_type: "file",
             sink_type: "elasticsearch",
-            transform_name: "RallyS3ToEs",
-            description: "Rally JSON file → ES bulk index (the flagship pair 🏎️)",
+            transform_name: "NdjsonToBulk",
+            description: "NDJSON file → ES bulk index, zero-parse wrap (the speed demon 📦⚡)",
+        },
+        FlowDescriptor {
+            source_type: "file",
+            sink_type: "opensearch",
+            transform_name: "NdjsonToBulk",
+            description: "NDJSON file → OpenSearch bulk index, zero-parse wrap (same speed, different logo 📦)",
         },
         FlowDescriptor {
             source_type: "s3-rally",
             sink_type: "elasticsearch",
             transform_name: "RallyS3ToEs",
             description: "S3 Rally benchmark data → ES bulk index (the cloud sequel 🪣)",
+        },
+        FlowDescriptor {
+            source_type: "s3-rally",
+            sink_type: "opensearch",
+            transform_name: "RallyS3ToEs",
+            description: "S3 Rally benchmark data → OpenSearch bulk index (cloud sequel: forked edition 🪣)",
         },
         FlowDescriptor {
             source_type: "file",
@@ -131,6 +145,30 @@ pub fn supported_flows() -> Vec<FlowDescriptor> {
             sink_type: "elasticsearch",
             transform_name: "EsHitToBulk",
             description: "ES reindex: search hits → bulk pairs (same engine, different cluster 🔄📡)",
+        },
+        FlowDescriptor {
+            source_type: "elasticsearch",
+            sink_type: "opensearch",
+            transform_name: "EsHitToBulk",
+            description: "ES → OpenSearch: the great migration across the fork 🔄📡",
+        },
+        FlowDescriptor {
+            source_type: "opensearch",
+            sink_type: "opensearch",
+            transform_name: "EsHitToBulk",
+            description: "OpenSearch reindex: cluster-to-cluster, same engine different address 🔄",
+        },
+        FlowDescriptor {
+            source_type: "opensearch",
+            sink_type: "elasticsearch",
+            transform_name: "EsHitToBulk",
+            description: "OpenSearch → ES: the reverse migration, boomerang docs 🪃📡",
+        },
+        FlowDescriptor {
+            source_type: "opensearch",
+            sink_type: "file",
+            transform_name: "Passthrough",
+            description: "OpenSearch → file: dump raw hits, sort it out later 📡→📂",
         },
         FlowDescriptor {
             source_type: "s3-rally",
@@ -215,13 +253,41 @@ pub(crate) trait Transform: std::fmt::Debug {
     ///
     /// "He who streams directly, allocates not in the middle." — Ancient pipeline proverb 🚰
     fn transform_into_ndjson(&self, raw_source_page: &str, output: &mut String) -> Result<()> {
-        // -- 🔄 Default: delegate to transform(), iterate items, push into output.
-        // -- Works for all transforms. Overrideable for those that can do better.
         let items = self.transform(raw_source_page)?;
         for item in &items {
             output.push_str(item.as_ref());
             output.push('\n');
         }
+        Ok(())
+    }
+
+    /// 🚀🏦 Stream-transform a source PoolBuffer directly into an output PoolBuffer.
+    ///
+    /// THE hot path for the 3-stage pipeline. TransformWorker calls this:
+    /// 1. Rent source buffer (from SourceWorker via channel)
+    /// 2. Rent output buffer (from pool)
+    /// 3. transform_into_pool_buffer(source, &mut output)
+    /// 4. Return source buffer to pool
+    /// 5. Send output buffer to SinkWorker via channel
+    ///
+    /// Default impl: reads source as UTF-8 str, delegates to transform_into_ndjson
+    /// via an intermediate String, then copies into output buffer. Override this
+    /// for transforms that can write directly into the PoolBuffer. 🔄
+    ///
+    /// 🧠 Tribal knowledge: this exists to eliminate the String → PoolBuffer conversion
+    /// overhead. Transforms that override this write directly into PoolBuffer bytes,
+    /// skipping String allocation entirely. The bytes stay in pool-managed memory from
+    /// source all the way to sink. Like a trust fund for data — never touches the heap. 💰
+    fn transform_into_pool_buffer(&self, source: &PoolBuffer, output: &mut PoolBuffer) -> Result<()> {
+        let source_str = source.as_str().map_err(|e| {
+            anyhow::anyhow!("💀 Source buffer contains invalid UTF-8. The bytes are lying to us. Error: {e}")
+        })?;
+        // 🧠 Default: delegate to transform_into_ndjson via a temporary String,
+        // then memcpy into the output PoolBuffer. Concrete impls should override
+        // to skip this intermediate String entirely.
+        let mut the_intermediary_string = String::with_capacity(source.len() * 2);
+        self.transform_into_ndjson(source_str, &mut the_intermediary_string)?;
+        output.push_str(&the_intermediary_string);
         Ok(())
     }
 }
@@ -253,6 +319,8 @@ pub(crate) enum DocumentTransformer {
     RallyS3ToEs(rally_s3_to_es::RallyS3ToEs),
     /// 🔄 Search hit → bulk action pair. ES/OpenSearch source output → ES/OpenSearch bulk input.
     EsHitToBulk(es_hit_to_bulk::EsHitToBulk),
+    /// 📦 Raw NDJSON → bulk action pairs. Zero parse. Just wraps lines with {"index":{}}.
+    NdjsonToBulk(ndjson_to_bulk::NdjsonToBulk),
     Passthrough(passthrough::Passthrough),
 }
 
@@ -274,22 +342,17 @@ impl DocumentTransformer {
     /// Fail loud at startup, not silent in the hot path.
     pub(crate) fn from_configs(source: &SourceConfig, sink: &SinkConfig) -> Self {
         match (source, sink) {
-            // -- 🏎️📡 File source → Elasticsearch sink:
-            // -- The first and flagship pair. Rally JSON to ES bulk.
-            // -- "In a world where JSON had too many fields... one function dared to strip them."
-            (SourceConfig::File(_), SinkConfig::Elasticsearch(_)) => {
-                Self::RallyS3ToEs(rally_s3_to_es::RallyS3ToEs)
+            // -- 📦📡 File source → ES/OS: raw NDJSON bulk wrap. No parsing. No drama.
+            // -- "Why parse what you won't modify? That's like proofreading a shredder."
+            // -- 🧠 If the file contains Rally metadata that needs stripping, use S3Rally source instead.
+            (SourceConfig::File(_), SinkConfig::Elasticsearch(_))
+            | (SourceConfig::File(_), SinkConfig::OpenSearch(_)) => {
+                Self::NdjsonToBulk(ndjson_to_bulk::NdjsonToBulk)
             }
 
-            // -- 🪣📡 S3 Rally → Elasticsearch: same as File→ES. Rally JSON stripped + bulk-formatted.
-            // -- "The sequel nobody asked for, but everyone needed." 🎬
-            (SourceConfig::S3Rally(_), SinkConfig::Elasticsearch(_)) => {
-                Self::RallyS3ToEs(rally_s3_to_es::RallyS3ToEs)
-            }
-
-            // -- 🔍📡 File/S3Rally → OpenSearch: same Rally transform as ES — bulk format is identical.
-            // -- "The fork that kept the API. The NDJSON that survived the divorce." 🎬
-            (SourceConfig::File(_), SinkConfig::OpenSearch(_))
+            // -- 🪣📡 S3 Rally → ES/OS: Rally JSON needs metadata stripping + bulk formatting.
+            // -- "The data has baggage. Six fields of baggage. We strip it at the gate." 🎬
+            (SourceConfig::S3Rally(_), SinkConfig::Elasticsearch(_))
             | (SourceConfig::S3Rally(_), SinkConfig::OpenSearch(_)) => {
                 Self::RallyS3ToEs(rally_s3_to_es::RallyS3ToEs)
             }
@@ -347,17 +410,30 @@ impl Transform for DocumentTransformer {
         match self {
             Self::RallyS3ToEs(t) => t.transform(raw_source_page),
             Self::EsHitToBulk(t) => t.transform(raw_source_page),
+            Self::NdjsonToBulk(t) => t.transform(raw_source_page),
             Self::Passthrough(t) => t.transform(raw_source_page),
         }
     }
 
     #[inline]
     fn transform_into_ndjson(&self, raw_source_page: &str, output: &mut String) -> Result<()> {
-        // -- 🚀 Dispatch streaming NDJSON — same match, but the fast path skips Vec<Cow>.
         match self {
             Self::RallyS3ToEs(t) => t.transform_into_ndjson(raw_source_page, output),
             Self::EsHitToBulk(t) => t.transform_into_ndjson(raw_source_page, output),
+            Self::NdjsonToBulk(t) => t.transform_into_ndjson(raw_source_page, output),
             Self::Passthrough(t) => t.transform_into_ndjson(raw_source_page, output),
+        }
+    }
+
+    #[inline]
+    fn transform_into_pool_buffer(&self, source: &PoolBuffer, output: &mut PoolBuffer) -> Result<()> {
+        // -- 🏦 Dispatch to concrete impl's pool buffer path. Same match, same static dispatch,
+        // -- but now the bytes never leave pool-managed memory. Like a VIP section for data. 🎭
+        match self {
+            Self::RallyS3ToEs(t) => t.transform_into_pool_buffer(source, output),
+            Self::EsHitToBulk(t) => t.transform_into_pool_buffer(source, output),
+            Self::NdjsonToBulk(t) => t.transform_into_pool_buffer(source, output),
+            Self::Passthrough(t) => t.transform_into_pool_buffer(source, output),
         }
     }
 }
@@ -415,6 +491,18 @@ mod tests {
                     region: "us-east-1".to_string(),
                     key: None,
                 }),
+                "opensearch" => {
+                    use crate::backends::opensearch::OpenSearchSourceConfig;
+                    SourceConfig::OpenSearch(OpenSearchSourceConfig {
+                        url: "https://localhost:9201".to_string(),
+                        index: "dummy".to_string(),
+                        username: None,
+                        password: None,
+                        api_key: None,
+                        danger_accept_invalid_certs: true,
+                        query: None,
+                    })
+                }
                 "inmemory" => SourceConfig::InMemory(()),
                 other_dimension => {
                     panic!("💀 Unknown source type in drift test: {}", other_dimension)
@@ -435,6 +523,17 @@ mod tests {
                     api_key: None,
                     index: Some("dummy".to_string()),
                 }),
+                "opensearch" => {
+                    use crate::backends::opensearch::OpenSearchSinkConfig;
+                    SinkConfig::OpenSearch(OpenSearchSinkConfig {
+                        url: "https://localhost:9201".to_string(),
+                        username: None,
+                        password: None,
+                        api_key: None,
+                        index: Some("dummy".to_string()),
+                        danger_accept_invalid_certs: true,
+                    })
+                }
                 "inmemory" => SinkConfig::InMemory(()),
                 other_dimension => {
                     panic!("💀 Unknown sink type in drift test: {}", other_dimension)
@@ -452,8 +551,8 @@ mod tests {
         }
 
         // ✅ Phase 2: Every non-panicking from_configs() combo must appear in supported_flows()
-        let all_source_types = ["file", "elasticsearch", "s3-rally", "inmemory"];
-        let all_sink_types = ["file", "elasticsearch", "inmemory"];
+        let all_source_types = ["file", "elasticsearch", "opensearch", "s3-rally", "inmemory"];
+        let all_sink_types = ["file", "elasticsearch", "opensearch", "inmemory"];
 
         for source_type in &all_source_types {
             for sink_type in &all_sink_types {
@@ -488,44 +587,41 @@ mod tests {
         );
     }
 
-    /// 🧪 Resolve File→ES to RallyS3ToEs, then transform a single-doc page.
+    /// 🧪 Resolve File→ES to NdjsonToBulk — zero-parse bulk wrapping.
+    /// 🧠 File source means raw NDJSON — no Rally metadata to strip, no parsing needed.
+    /// If you want Rally field stripping, use S3Rally source instead.
     #[test]
-    fn the_one_where_config_enums_resolve_to_the_right_transform() -> Result<()> {
+    fn the_one_where_file_to_es_resolves_to_ndjson_to_bulk() -> Result<()> {
         // 🔧 Build source/sink configs like the real pipeline does
         let source = SourceConfig::File(FileSourceConfig {
-            file_name: "rally_export.json".to_string(),
+            file_name: "geonames.json".to_string(),
         });
         let sink = SinkConfig::Elasticsearch(ElasticsearchSinkConfig {
             url: "http://localhost:9200".to_string(),
             username: None,
             password: None,
             api_key: None,
-            index: Some("rally".to_string()),
+            index: Some("geonames".to_string()),
         });
 
-        // 🎯 Resolve — should give us RallyS3ToEs
+        // 🎯 Resolve — should give us NdjsonToBulk (not RallyS3ToEs!)
         let the_transformer = DocumentTransformer::from_configs(&source, &sink);
         assert!(
-            matches!(the_transformer, DocumentTransformer::RallyS3ToEs(_)),
-            "File → ES should resolve to RallyS3ToEs"
+            matches!(the_transformer, DocumentTransformer::NdjsonToBulk(_)),
+            "File → ES should resolve to NdjsonToBulk — no parsing, just bulk wrapping"
         );
 
-        // 🔄 Transform a Rally blob page (single doc) through it
-        let rally_page = serde_json::json!({
-            "ObjectID": 42069,
-            "Name": "Test story",
-            "_rallyAPIMajor": "2"
-        })
-        .to_string();
-        let the_items = the_transformer.transform(&rally_page)?;
+        // 🔄 Transform a raw JSON doc through it — should wrap without parsing
+        let the_raw_doc = r#"{"name":"Earth","population":8000000000}"#;
+        let the_items = the_transformer.transform(the_raw_doc)?;
 
         // ✅ Single doc page → one item, which is ES bulk (action\nsource)
-        assert_eq!(the_items.len(), 1, "Single-doc page → one item");
+        assert_eq!(the_items.len(), 1, "🎯 Single-doc page → one bulk pair");
         let the_output = the_items[0].as_ref();
         let the_lines: Vec<&str> = the_output.split('\n').collect();
-        assert_eq!(the_lines.len(), 2, "ES bulk = two lines");
-        let the_action: serde_json::Value = serde_json::from_str(the_lines[0])?;
-        assert_eq!(the_action["index"]["_id"], "42069");
+        assert_eq!(the_lines.len(), 2, "🎯 ES bulk = action line + source line");
+        assert_eq!(the_lines[0], r#"{"index":{}}"#, "🎯 Action line has no _id (auto-gen)");
+        assert_eq!(the_lines[1], the_raw_doc, "🎯 Source line is untouched — zero parse");
 
         Ok(())
     }
@@ -572,11 +668,16 @@ mod tests {
         ));
     }
 
-    /// 🧪 Full pipeline integration: resolve + transform Rally→ES multi-doc page.
+    /// 🧪 Full pipeline integration: resolve + transform Rally→ES multi-doc page via S3Rally source.
+    /// 🧠 S3Rally source is the correct source type for Rally data that needs metadata stripping.
+    /// File source now uses NdjsonToBulk (zero-parse). This test validates the Rally path still works.
     #[test]
     fn the_one_where_rally_json_flies_direct_to_es_bulk_via_config_resolution() -> Result<()> {
-        let source = SourceConfig::File(FileSourceConfig {
-            file_name: "data.json".to_string(),
+        let source = SourceConfig::S3Rally(S3RallySourceConfig {
+            track: crate::backends::s3_rally::RallyTrack::Geonames,
+            bucket: "test-bucket".to_string(),
+            region: "us-east-1".to_string(),
+            key: None,
         });
         let sink = SinkConfig::Elasticsearch(ElasticsearchSinkConfig {
             url: "http://localhost:9200".to_string(),
@@ -710,17 +811,17 @@ mod tests {
         })
     }
 
-    /// 🧪 File → OpenSearch resolves to RallyS3ToEs — bulk format is identical across the fork.
+    /// 🧪 File → OpenSearch resolves to NdjsonToBulk — same zero-parse treatment as ES.
     /// "He who shares a wire format, shares a transform." — Ancient NDJSON proverb
     #[test]
-    fn the_one_where_file_to_opensearch_resolves_to_rally_transform() {
+    fn the_one_where_file_to_opensearch_resolves_to_ndjson_to_bulk() {
         let source = SourceConfig::File(FileSourceConfig {
-            file_name: "rally_export.json".to_string(),
+            file_name: "data.json".to_string(),
         });
         let the_transformer = DocumentTransformer::from_configs(&source, &opensearch_sink_config());
         assert!(
-            matches!(the_transformer, DocumentTransformer::RallyS3ToEs(_)),
-            "File → OpenSearch should resolve to RallyS3ToEs — the bulk format survived the fork"
+            matches!(the_transformer, DocumentTransformer::NdjsonToBulk(_)),
+            "File → OpenSearch should resolve to NdjsonToBulk — same speed, different logo"
         );
     }
 

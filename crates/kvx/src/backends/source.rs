@@ -15,6 +15,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::backends::{elasticsearch, file, in_mem, opensearch, s3_rally};
+use crate::buffer_pool::PoolBuffer;
 
 /// 🚰 A source that produces one raw page per call — maximally ignorant of content format.
 ///
@@ -36,16 +37,18 @@ use crate::backends::{elasticsearch, file, in_mem, opensearch, s3_rally};
 /// - Source is a data faucet 🚿 — it pours, the pipeline catches
 /// - **Zero-copy enabled**: Source doesn't split docs, Composer borrows from buffered pages via Cow
 /// - `pump` replaces the old `next_page` + `set_page_size_hint` two-step — one call, one hint, one page.
+/// - Returns `PoolBuffer` — a recycled byte buffer from the global pool. Zero per-page heap allocs in steady state.
 #[async_trait]
 pub trait Source: std::fmt::Debug {
-    /// 🚰 Pump the next raw page of data, with a doc count hint for batch sizing.
+    /// 🚰 Pump the next raw page of data into a PoolBuffer, with a doc count hint for batch sizing.
     ///
     /// `doc_count_hint` is the controller's recommended batch size (number of documents).
     /// Sources that support dynamic sizing (File, S3Rally) use it. Others ignore it.
-    /// Returns `Ok(Some(page))` while data flows — one page per call, content uninterpreted.
+    /// Returns `Ok(Some(PoolBuffer))` while data flows — one page per call, content uninterpreted.
+    /// The PoolBuffer auto-returns to the global buffer pool when dropped. Zero alloc recycling. 🔄
     /// Returns `Ok(None)` when the tap runs dry. EOF. Fin. The end. 🏁
     /// Returns `Err(...)` when something has gone sideways, sidelong, or fully upside-down.
-    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<String>>;
+    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<PoolBuffer>>;
 }
 
 /// 🎭 The many faces of a Source — a polymorphic casting call for data origins.
@@ -69,8 +72,8 @@ pub(crate) enum SourceBackend {
 
 #[async_trait]
 impl Source for SourceBackend {
-    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<String>> {
-        // -- 🚰 The enum match: five backends enter, one page leaves. Thunderdome rules.
+    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<PoolBuffer>> {
+        // -- 🚰 The enum match: five backends enter, one PoolBuffer leaves. Thunderdome rules.
         match self {
             SourceBackend::InMemory(i) => i.pump(doc_count_hint).await,
             SourceBackend::File(f) => f.pump(doc_count_hint).await,

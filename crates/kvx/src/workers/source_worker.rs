@@ -24,6 +24,7 @@
 
 use super::Worker;
 use crate::backends::{Source, SourceBackend};
+use crate::buffer_pool::PoolBuffer;
 use crate::throttlers::{Controller, ControllerBackend};
 use anyhow::{Context, Result};
 use async_channel::Sender;
@@ -48,7 +49,7 @@ use tracing::debug;
 /// Tenth visit: they just hand you the right cup. That's PID control. ☕🎛️
 #[derive(Debug)]
 pub(crate) struct SourceWorker {
-    tx: Sender<String>,
+    tx: Sender<PoolBuffer>,
     source: SourceBackend,
     /// 🎛️ The feedback controller — decides batch size, learns from measurements.
     /// ConfigController = fixed batch size (default). PidBytesToDocCount = adaptive.
@@ -65,7 +66,7 @@ impl SourceWorker {
     /// a controller (how many docs to fetch per page), and a cancellation token (the kill switch).
     /// The controller is eager. The token is patient. Together, they manage throughput and graceful exits. 🎛️🛑
     pub(crate) fn new(
-        tx: Sender<String>,
+        tx: Sender<PoolBuffer>,
         source: SourceBackend,
         controller: ControllerBackend,
         cancellation_token: CancellationToken,
@@ -100,6 +101,10 @@ impl Worker for SourceWorker {
                         {
                             Some(page) => {
                                 let the_page_size_bytes = page.len();
+                                // 🔬 Report source page to diag counters — pages pumped + bytes read
+                                if crate::is_bench_mode() {
+                                    crate::diag_report_source_page(the_page_size_bytes as u64);
+                                }
                                 debug!(
                                     "📤 SourceWorker sending {} byte page to channel (batch_hint={})",
                                     the_page_size_bytes, the_batch_size_hint

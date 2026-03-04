@@ -5,7 +5,7 @@
 # 🦆 (he lives here now, don't ask why, he just vibes)
 
 [runtime]
-queue_capacity = 16
+queue_capacity = 128
 sink_parallelism = 32
 
 [source.File]

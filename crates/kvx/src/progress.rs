@@ -15,6 +15,10 @@ use std::time::{Duration, Instant};
 use comfy_table::{Cell, CellAlignment, ContentArrangement, Table, presets::NOTHING};
 use indicatif::{ProgressBar, ProgressStyle};
 
+// 🔬 Bench mode check — delegates to crate::is_bench_mode() (OnceLock-cached, O(1) after first call).
+// "One source of truth for bench mode. Two was already one too many." — Ancient DRY proverb 🦆
+use crate::is_bench_mode;
+
 // -- 📏 one mebibyte — not a megabyte, pedants. there's a difference and I will die on this hill.
 const MIB: u64 = 1024 * 1024;
 
@@ -160,6 +164,12 @@ impl ProgressMetrics {
         self.total_bytes += bytes_read;
         self.total_docs += docs_read;
 
+        // 📊 Bench mode: skip all TUI rendering — just accumulate counters.
+        // The terminal doesn't need eye candy when we're measuring throughput. 🦆
+        if is_bench_mode() {
+            return;
+        }
+
         // 🎬 Throttle renders to ~4 FPS (250ms). Terminals aren't GPUs and comfy_table
         // rebuilds + indicatif redraws on every batch murder throughput.
         // 🧠 TRIBAL KNOWLEDGE: Rendering every batch caused a regression from 16k to 459 docs/s
@@ -176,7 +186,9 @@ impl ProgressMetrics {
     /// ✅ Mark the progress bar done. Ring the bell. We made it.
     /// (Or we hit EOF. Same energy.)
     pub(crate) fn finish(&self) {
-        self.progress_bar.finish();
+        if !is_bench_mode() {
+            self.progress_bar.finish();
+        }
     }
 
     /// 📈 Calculate current throughput rates using a 5-second sliding window.

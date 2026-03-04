@@ -202,6 +202,11 @@ struct RunArgs {
     #[arg(long, default_value = "1")]
     sink_parallelism: usize,
 
+    /// 🧠 Number of parallel transform workers (CPU-bound byte crunchers between source and sink).
+    /// Defaults to num_cpus - 1 if omitted. "One core to rule the runtime, the rest shall transform." 🧵
+    #[arg(long)]
+    transform_parallelism: Option<usize>,
+
     /// 📏 Max docs per source batch
     #[arg(long)]
     source_max_batch_size_docs: Option<usize>,
@@ -213,6 +218,12 @@ struct RunArgs {
     /// 📏 Max bytes per sink request
     #[arg(long)]
     sink_max_request_size_bytes: Option<usize>,
+
+    /// 📊 Bench mode: run for N seconds then stop and print throughput summary.
+    /// Spawns a timeout task that calls kvx::stop() after N seconds.
+    /// "Time is what prevents everything from happening at once." — John Wheeler, also applicable to benchmarks 🦆
+    #[arg(long)]
+    bench_seconds: Option<u64>,
 }
 
 // ============================================================
@@ -336,6 +347,9 @@ async fn run_migration(args: RunArgs) -> Result<()> {
     let the_runtime_config = RuntimeConfig {
         queue_capacity: args.queue_capacity,
         sink_parallelism: args.sink_parallelism,
+        transform_parallelism: args
+            .transform_parallelism
+            .unwrap_or_else(kvx::app_config::default_transform_parallelism),
     };
 
     // 🏗️ Phase 5: Build throttle config — TOML base + CLI overrides
@@ -365,8 +379,26 @@ async fn run_migration(args: RunArgs) -> Result<()> {
         throttle: the_throttle_config,
     };
 
+    // 📊 Bench mode: arm the timer, spawn timeout task, set env var to suppress TUI
+    if let Some(bench_secs) = args.bench_seconds {
+        // SAFETY: set_var is called before any worker threads are spawned.
+        // At this point we're single-threaded in main() before kvx::run(). 🦆
+        unsafe { std::env::set_var("KVX_BENCH_MODE", "1") };
+        kvx::bench_arm();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(bench_secs)).await;
+            eprintln!("⏱️ Bench timeout ({bench_secs}s) — stopping pipeline...");
+            kvx::stop().await.ok();
+        });
+    }
+
     // 🚀 SEND IT. No take-backs. This is not a drill.
     let result = kvx::run(the_grand_config).await;
+
+    // 📊 Print bench summary if we were in bench mode
+    if args.bench_seconds.is_some() {
+        kvx::bench_summary();
+    }
 
     // 💀 Error handling: the part where we find out what went wrong
     if let Err(err) = result {
@@ -667,9 +699,11 @@ mod tests {
             sink_index: None,
             queue_capacity: 10,
             sink_parallelism: 1,
+            transform_parallelism: None,
             source_max_batch_size_docs: None,
             source_max_batch_size_bytes: None,
             sink_max_request_size_bytes: None,
+            bench_seconds: None,
         };
 
         let source = build_source_config(&args, None)?;
@@ -705,9 +739,11 @@ mod tests {
             sink_index: None,
             queue_capacity: 10,
             sink_parallelism: 1,
+            transform_parallelism: None,
             source_max_batch_size_docs: None,
             source_max_batch_size_bytes: None,
             sink_max_request_size_bytes: None,
+            bench_seconds: None,
         };
 
         let result = build_source_config(&args, None);
@@ -743,9 +779,11 @@ mod tests {
             sink_index: None,
             queue_capacity: 10,
             sink_parallelism: 1,
+            transform_parallelism: None,
             source_max_batch_size_docs: None,
             source_max_batch_size_bytes: None,
             sink_max_request_size_bytes: None,
+            bench_seconds: None,
         };
 
         let result = build_source_from_cli_args(&SourceType::File, &args);

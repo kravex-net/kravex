@@ -32,6 +32,7 @@ use serde::Deserialize;
 use tracing::{debug, trace};
 
 use crate::backends::Sink;
+use crate::buffer_pool::PoolBuffer;
 
 // ⚠️ Per-doc index routing: each Hit can carry its own `_index` field, which overrides this config.
 // This means a single sink can write to multiple indices if your source data is spicy enough.
@@ -87,10 +88,15 @@ pub struct OpenSearchSinkConfig {
 /// "What's the DEAL with having two nearly identical bulk APIs? It's like having
 /// two identical restaurants across the street from each other. Same menu.
 /// Different logo. One takes Apache 2.0, the other takes SSPL." — Seinfeld, probably
+/// 📡 OpenSearchSink — mirrors ElasticsearchSink with pre-computed URL + auth.
+/// 🧠 Performance: bulk URL and auth header are computed once in new(), reused per-request.
+/// No per-request format!() or base64 encoding on the hot path. 🦆
 #[derive(Debug)]
 pub struct OpenSearchSink {
     client: reqwest::Client,
-    sink_config: OpenSearchSinkConfig,
+    // 🔒 Pre-computed at init — zero per-request allocation overhead
+    the_precomputed_bulk_url: String,
+    the_precomputed_auth_header: Option<reqwest::header::HeaderValue>,
 }
 
 #[async_trait]
@@ -100,12 +106,13 @@ impl Sink for OpenSearchSink {
     /// The SinkWorker upstream already transformed each doc and binary-collected them into
     /// a single NDJSON payload string. We just fire it into the OpenSearch void.
     /// "In a world where two search engines shared a bulk API... one sink dared to POST to both."
-    async fn drain(&mut self, payload: String) -> Result<()> {
+    async fn drain(&mut self, payload: PoolBuffer) -> Result<()> {
         debug!(
             "🚰 Draining {} bytes to OpenSearch /_bulk — documents leaving the building, fork-style",
             payload.len()
         );
-        self.submit_bulk_request(payload).await
+        // 🏦 Convert PoolBuffer → Vec<u8> for reqwest body. Same zero-copy handoff as ES sink. 🚀
+        self.submit_bulk_request(payload.into_vec()).await
             .context("💀 The OpenSearch bulk submission face-planted at the finish line. The NDJSON was rendered with artisanal care, the SinkWorker did its job, but the HTTP layer said 'nah.' Check connectivity. Check your cluster. Check if your self-signed cert expired again.")?;
         Ok(())
     }
@@ -140,6 +147,8 @@ impl OpenSearchSink {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
+            .tcp_nodelay(true) // 🚀 Disable Nagle's — bulk payloads go NOW, not in 40ms chunks
+            .pool_idle_timeout(Duration::from_secs(30)) // 🔄 Warm connections > cold handshakes
             .danger_accept_invalid_certs(config.danger_accept_invalid_certs)
             .build()
             .context("💀 The HTTP client refused to be born. The TLS stack had a meltdown. We tried to build a reqwest::Client and the universe said 'nope.' Probably a missing TLS cert or a cursed system OpenSSL. Or you set danger_accept_invalid_certs but the universe still doesn't trust you.")?;
@@ -179,10 +188,45 @@ impl OpenSearchSink {
             }
         }
 
-        // 🚀 All checks passed. No buffer to init — we're I/O-only now. Clean. Light. Fork'd.
+        // 🚀 Pre-compute bulk URL — one format!() at init, zero per-request. Fork-efficient. 🍴
+        let the_base_trimmed = config.url.trim_end_matches('/');
+        let the_precomputed_bulk_url = match config.index {
+            Some(ref index_name) => format!(
+                "{}/{}/_bulk?filter_path=items.*.error",
+                the_base_trimmed, index_name
+            ),
+            None => format!(
+                "{}/_bulk?filter_path=items.*.error",
+                the_base_trimmed
+            ),
+        };
+
+        // 🔒 Pre-compute auth header — same precedence: API key > basic auth > none
+        let the_precomputed_auth_header = if let Some(ref api_key) = config.api_key {
+            Some(
+                reqwest::header::HeaderValue::from_str(&format!("ApiKey {}", api_key))
+                    .context("💀 API key contains invalid header characters — check your secrets")?,
+            )
+        } else if let (Some(username), password) = (&config.username, &config.password) {
+            use base64::Engine;
+            let credentials = match password {
+                Some(p) => format!("{}:{}", username, p),
+                None => format!("{}:", username),
+            };
+            let encoded = base64::engine::general_purpose::STANDARD.encode(credentials);
+            Some(
+                reqwest::header::HeaderValue::from_str(&format!("Basic {}", encoded))
+                    .context("💀 Basic auth credentials contain invalid header characters")?,
+            )
+        } else {
+            None
+        };
+
+        // 🚀 All checks passed. URL and auth pre-baked. Zero per-request overhead. Clean. Light. Fork'd.
         Ok(Self {
-            sink_config: config,
             client,
+            the_precomputed_bulk_url,
+            the_precomputed_auth_header,
         })
     }
 
@@ -196,35 +240,19 @@ impl OpenSearchSink {
     ///
     /// 🔄 This function does not retry. Retries are the caller's problem. Ancient proverb:
     /// "He who retries in the sink, retries in the wrong abstraction layer."
-    async fn submit_bulk_request(&self, request_body: String) -> Result<()> {
-        // -- 📡 Build the bulk endpoint URL. The `_bulk` API: OpenSearch's loading dock.
-        // -- NDJSON only — same format as Elasticsearch. The fork preserved the sacred wire format.
-        // 📡 Index-in-URL routing: when a static index is configured, POST to /{index}/_bulk.
-        // This ensures the action line `{"index":{}}` (no `_index` field) works correctly.
-        // Without this, OpenSearch rejects docs that lack `_index` in the action metadata.
-        // When no index is configured (per-doc routing), fall back to the bare `/_bulk` endpoint.
-        let the_base_url_trimmed_like_a_fresh_haircut = self.sink_config.url.trim_end_matches('/');
-        // 🚀 filter_path=items.*.error: OpenSearch returns `{}` on success, only error details on
-        // failure. Same optimization as the ES sink — keep the hot path lean.
-        let bulk_url = match self.sink_config.index {
-            Some(ref index_name) => format!(
-                "{}/{}/_bulk?filter_path=items.*.error",
-                the_base_url_trimmed_like_a_fresh_haircut, index_name
-            ),
-            None => format!(
-                "{}/_bulk?filter_path=items.*.error",
-                the_base_url_trimmed_like_a_fresh_haircut
-            ),
-        };
+    /// 📡 Fires a `_bulk` POST with pre-computed URL + auth. Zero per-request allocations.
+    /// Content-length check: skip body read on success (filter_path returns `{}` = 2 bytes). 🦆
+    async fn submit_bulk_request(&self, request_body: Vec<u8>) -> Result<()> {
+        // 🚀 Pre-computed URL + auth — zero format!() on hot path
         let mut request = self
             .client
-            .post(&bulk_url)
-            // ⚠️ Content-Type: application/x-ndjson — not application/json. CRITICAL.
-            // OpenSearch inherits this requirement from Elasticsearch's bulk API.
+            .post(&self.the_precomputed_bulk_url)
             .header("Content-Type", "application/x-ndjson");
 
-        // 🔒 Auth: API key > basic auth.
-        request = apply_auth_raw(request, &self.sink_config);
+        // 🔒 Apply pre-computed auth header
+        if let Some(ref auth_header) = self.the_precomputed_auth_header {
+            request = request.header("Authorization", auth_header.clone());
+        }
 
         let response = request
             .body(request_body)
@@ -233,10 +261,7 @@ impl OpenSearchSink {
             .context("💀 The bulk request never made it to OpenSearch. Check connectivity, check timeouts, check if your self-signed cert rotated itself into oblivion.")?;
 
         let status = response.status();
-        // 📡 ALWAYS read the response body — bulk API returns 200 even when items fail.
-        // 🧠 TRIBAL KNOWLEDGE: Same pattern as ElasticsearchSink. The bulk API is
-        // wire-format identical between ES and OpenSearch. Both return 200 with
-        // per-item errors hidden in the response body.
+
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             anyhow::bail!(
@@ -246,8 +271,16 @@ impl OpenSearchSink {
             );
         }
 
-        // 📡 With filter_path=items.*.error, response is `{}` on success (2 bytes!),
-        // only error details on failure. No full per-item bloat on the hot path.
+        // 📡 filter_path=items.*.error: `{}` on success (2 bytes). Skip body read when clean.
+        let content_length = response.content_length();
+        if let Some(len) = content_length {
+            if len <= 2 {
+                trace!("🚀 OpenSearch bulk request landed — content-length={}, skipping body read", len);
+                return Ok(());
+            }
+        }
+
+        // ⚠️ Errors may exist — read and check
         let body = response.text().await.unwrap_or_default();
         if body.contains("\"error\"") {
             anyhow::bail!(
@@ -279,29 +312,9 @@ fn apply_auth(
     }
 }
 
-/// 🔒 Apply auth to a raw RequestBuilder (post-body variant). Same logic as `apply_auth`.
-///
-/// 🧠 TRIBAL KNOWLEDGE: Why two identical-looking auth functions?
-/// `reqwest::RequestBuilder` has move semantics — every method call (`.body()`, `.header()`,
-/// `.basic_auth()`) consumes `self` and returns a new builder. You can't call `.body()` and
-/// then pass the same builder to a shared `apply_auth()` because the original was moved.
-/// The caller of `apply_auth` builds the request UP TO the auth step, then this function
-/// finishes it. `apply_auth_raw` exists for call sites where `.body()` was already called
-/// on a different builder chain. They look identical but serve different call-site ergonomics.
-/// Merging them would require the caller to restructure its builder chain. Not worth it.
-/// The borrow checker has opinions. Strong ones.
-fn apply_auth_raw(
-    request: reqwest::RequestBuilder,
-    config: &OpenSearchSinkConfig,
-) -> reqwest::RequestBuilder {
-    if let Some(ref api_key) = config.api_key {
-        request.header("Authorization", format!("ApiKey {}", api_key))
-    } else if let Some(ref username) = config.username {
-        request.basic_auth(username, config.password.as_ref())
-    } else {
-        request
-    }
-}
+// 🗑️ apply_auth_raw() removed — submit_bulk_request() now uses pre-computed auth headers.
+// The function served its purpose. It lived. It authenticated. It was made redundant by optimization.
+// Rest in peace, little helper. You were a good function. 🦆
 
 #[cfg(test)]
 mod tests {

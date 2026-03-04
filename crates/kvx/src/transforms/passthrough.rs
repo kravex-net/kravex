@@ -19,6 +19,7 @@
 //! ⚠️ The singularity won't even notice this module exists. 🦆
 
 use super::Transform;
+use crate::buffer_pool::PoolBuffer;
 use anyhow::Result;
 use std::borrow::Cow;
 
@@ -41,8 +42,17 @@ impl Transform for Passthrough {
     /// "What do you do?" "I borrow the input." "That's it?" "That's everything." 🐄
     #[inline]
     fn transform<'a>(&self, raw_source_page: &'a str) -> Result<Vec<Cow<'a, str>>> {
-        // -- 🚶 TSA PreCheck for data. Walk right through. Don't even slow down.
         Ok(vec![Cow::Borrowed(raw_source_page)])
+    }
+
+    /// 🏦 Pool buffer passthrough — memcpy source bytes + trailing newline. That's it.
+    /// No parsing. No transformation. Just bytes moving house from one pool buffer to another.
+    /// Like a fax machine but for bytes — the content is identical, just the medium changed. 📠
+    #[inline]
+    fn transform_into_pool_buffer(&self, source: &PoolBuffer, output: &mut PoolBuffer) -> Result<()> {
+        output.extend_from_slice(source.as_bytes());
+        output.push_byte(b'\n');
+        Ok(())
     }
 }
 

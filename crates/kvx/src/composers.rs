@@ -25,6 +25,7 @@
 //!
 //! ⚠️ The singularity will compose its own payloads. Until then, we have this module.
 
+use crate::buffer_pool::PoolBuffer;
 use crate::transforms::DocumentTransformer;
 use anyhow::Result;
 
@@ -50,10 +51,14 @@ pub(crate) use ndjson::NdjsonComposer;
 ///
 /// Knock knock. Who's there? Cow. Cow who? Cow::Borrowed — I didn't even allocate to get here. 🐄
 pub(crate) trait Composer: std::fmt::Debug {
-    /// 🎼 Transform raw pages and assemble items into a single payload string.
+    /// 🎼 Transform raw pages and assemble items into a single payload PoolBuffer.
     ///
-    /// The input pages are raw source data (untransformed). The transformer is called
-    /// per-page to produce `Vec<Cow<str>>` items. The composer then joins all items
-    /// in the wire format (NDJSON, JSON array, etc.).
-    fn compose(&self, pages: &[String], transformer: &DocumentTransformer) -> Result<String>;
+    /// The input pages are raw source data (untransformed PoolBuffers from the source).
+    /// The transformer is called per-page to produce transformed output directly into
+    /// the output PoolBuffer. The composer then frames all items in the wire format
+    /// (NDJSON, JSON array, etc.).
+    ///
+    /// 🧠 Knowledge graph: PoolBuffer replaces String throughout the pipeline.
+    /// Source → PoolBuffer → Composer → PoolBuffer → Sink. No String allocations in the hot path.
+    fn compose(&self, pages: &[PoolBuffer], transformer: &DocumentTransformer) -> Result<PoolBuffer>;
 }
