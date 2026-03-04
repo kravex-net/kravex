@@ -32,3 +32,6 @@ __pycache__/
 # DHAT profiling artifacts
 dhat-heap.json
 DHAT Viewer*
+
+benchmark/data/
+benchmark/esrally_tracks/
