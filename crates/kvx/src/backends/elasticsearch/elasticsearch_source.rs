@@ -28,12 +28,132 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
+use serde_json::value::RawValue;
 use serde_json::Value;
+use std::fmt::Write;
 use std::time::Duration;
 use tracing::{debug, info, trace};
 
 use crate::backends::Source;
+use crate::buffer_pool;
 use crate::progress::ProgressMetrics;
+
+// 🧠 Zero-copy deserialization structs for search responses.
+// RawValue borrows directly from the response_text String — no intermediate Value tree.
+// This eliminates the full recursive serde_json::Value parse that was burning ~37% of allocations.
+// Pattern borrowed from es_hit_to_bulk.rs where it proved its worth.
+
+/// 📦 Result of parsing a search response — everything pump() needs, pre-computed.
+/// The page is already joined NDJSON, ready to send down the channel.
+/// "He who pre-joins in spawn_blocking, shall not block the async executor." — Ancient Tokio Proverb
+pub(crate) struct ParsedSearchResult {
+    /// 📄 Pre-joined NDJSON page — one line per hit, no trailing newline
+    pub page: String,
+    /// 📊 Total bytes across all hit lines (before join, for accurate progress tracking)
+    pub page_bytes: usize,
+    /// 📊 Number of documents in this page
+    pub doc_count: usize,
+    /// 🔖 Refreshed PIT ID (ES may rotate it on each response)
+    pub new_pit_id: Option<String>,
+    /// 🔄 Sort values from the last hit — becomes the next search_after cursor
+    pub new_search_after: Option<Vec<Value>>,
+}
+
+/// 📡 Typed search response — borrows strings from the response body via RawValue.
+/// No Value tree, no deep clone, no existential parsing crisis.
+#[derive(Deserialize)]
+struct SearchResponse<'a> {
+    #[serde(default)]
+    pit_id: Option<&'a str>,
+    hits: SearchResponseHits<'a>,
+}
+
+/// 📦 The hits wrapper — ES nests hits inside hits because recursion is a lifestyle.
+#[derive(Deserialize)]
+struct SearchResponseHits<'a> {
+    #[serde(borrow)]
+    hits: Vec<SearchResponseHit<'a>>,
+}
+
+/// 📄 A single search hit — _id and _source borrow as RawValue (zero-copy JSON slices).
+/// sort is owned because it becomes the search_after cursor for the next request.
+#[derive(Deserialize)]
+struct SearchResponseHit<'a> {
+    #[serde(borrow)]
+    _id: Option<&'a RawValue>,
+    _index: Option<&'a str>,
+    #[serde(borrow)]
+    _source: Option<&'a RawValue>,
+    sort: Option<Vec<Value>>,
+}
+
+/// 🧵 Parse search response JSON on a blocking thread — CPU work stays off tokio.
+/// Takes ownership of response_text so RawValue can borrow from it.
+/// Returns ParsedSearchResult with pre-joined NDJSON page + pagination state.
+///
+/// Per hit: write!() directly into a pre-sized String. No intermediate Vec<String>,
+/// no json!() macro, no to_string() per hit. Just raw bytes into a buffer.
+/// "Parse once, write once, allocate once. The holy trinity of not wasting RAM."
+fn parse_search_response(response_text: &str) -> Result<Option<ParsedSearchResult>> {
+    // 🔍 Typed deserialize — RawValue fields borrow directly from response_text
+    let response: SearchResponse<'_> = serde_json::from_str(response_text)
+        .context("💀 Search response was not valid JSON. The cluster is speaking in riddles.")?;
+
+    let hits = &response.hits.hits;
+
+    if hits.is_empty() {
+        return Ok(None);
+    }
+
+    // 🏗️ Pre-size the page buffer: ~200 bytes per doc is a reasonable estimate
+    // (action metadata + _source). Over-estimating is cheap, re-allocating is not.
+    let mut page = String::with_capacity(hits.len() * 200);
+    let mut total_bytes = 0usize;
+
+    for (i, hit) in hits.iter().enumerate() {
+        if i > 0 {
+            page.push('\n');
+        }
+
+        // 📄 Write hit directly into page buffer: {"_id":...,"_index":"...","_source":...}
+        // RawValue.get() returns the raw JSON slice — no parsing, no escaping, just bytes
+        let the_mark_before_writing = page.len();
+
+        // -- 🎬 "Write it. Write it all. And don't look back." — Every buffer that ever lived
+        page.push_str(r#"{"_id":"#);
+        match hit._id {
+            Some(raw_id) => page.push_str(raw_id.get()),
+            None => page.push_str("null"),
+        }
+        page.push_str(r#","_index":"#);
+        match hit._index {
+            Some(idx) => write!(page, "\"{}\"", idx).unwrap(),
+            None => page.push_str("null"),
+        }
+        page.push_str(r#","_source":"#);
+        match &hit._source {
+            Some(raw_src) => page.push_str(raw_src.get()),
+            None => page.push_str("null"),
+        }
+        page.push('}');
+
+        total_bytes += page.len() - the_mark_before_writing;
+    }
+
+    // 🔄 Extract search_after cursor from last hit
+    let new_search_after = hits.last().and_then(|h| h.sort.clone());
+
+    // 🔖 PIT ID — owned copy since response_text lifetime ends after spawn_blocking
+    let new_pit_id = response.pit_id.map(|s| s.to_string());
+
+    Ok(Some(ParsedSearchResult {
+        page,
+        page_bytes: total_bytes,
+        doc_count: hits.len(),
+        new_pit_id,
+        new_search_after,
+    }))
+}
 
 // 🔧 Config — moved here from supervisors/config.rs because configs should live near the thing they configure.
 //
@@ -123,7 +243,7 @@ impl Source for ElasticsearchSource {
     /// Returns `Ok(Some(page))` where page is NDJSON: one JSON line per hit.
     /// Each line: `{"_id":"abc","_index":"src-idx","_source":{"field":"val"}}`
     /// Returns `Ok(None)` when all documents have been read.
-    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<String>> {
+    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<buffer_pool::PoolBuffer>> {
         // 🏁 Short-circuit if we already know we're done
         if self.exhausted {
             return Ok(None);
@@ -134,32 +254,41 @@ impl Source for ElasticsearchSource {
             self.open_pit().await?;
         }
 
-        // 📡 Execute search with PIT + search_after
-        let (hits, page_bytes) = self.execute_search(doc_count_hint).await?;
+        // 📡 Execute search + parse (HTTP async, JSON parsing on spawn_blocking)
+        let parsed = self.execute_search(doc_count_hint).await?;
 
-        if hits.is_empty() {
-            // 🏁 EOF — clean up PIT and signal done
-            debug!("🏁 Elasticsearch source exhausted — zero hits returned, closing PIT");
-            self.cleanup_pit().await;
-            self.exhausted = true;
-            self.progress.finish();
-            return Ok(None);
+        match parsed {
+            None => {
+                // 🏁 EOF — clean up PIT and signal done
+                debug!("🏁 Elasticsearch source exhausted — zero hits returned, closing PIT");
+                self.cleanup_pit().await;
+                self.exhausted = true;
+                self.progress.finish();
+                Ok(None)
+            }
+            Some(result) => {
+                // 📊 Update progress + pagination state
+                self.progress
+                    .update(result.page_bytes as u64, result.doc_count as u64);
+
+                if let Some(pit_id) = result.new_pit_id {
+                    self.pit_id = Some(pit_id);
+                }
+                self.search_after = result.new_search_after;
+
+                trace!(
+                    "📄 ES source page: {} docs, {} bytes — zero-copy parsed, spawn_blocking approved",
+                    result.doc_count,
+                    result.page.len()
+                );
+
+                // 🏦 Convert the pre-joined NDJSON page String into a PoolBuffer.
+                // rent_from_string takes ownership of the String's allocation and assigns
+                // it a bucket so it returns to the pool when downstream workers drop it.
+                // 🧠 This avoids a copy — the String's backing Vec becomes the PoolBuffer's data.
+                Ok(Some(buffer_pool::rent_from_string(result.page)))
+            }
         }
-
-        // 📊 Update progress
-        let docs_count = hits.len() as u64;
-        self.progress.update(page_bytes as u64, docs_count);
-
-        // 🔄 Build NDJSON page
-        let page = hits.join("\n");
-
-        trace!(
-            "📄 ES source page: {} docs, {} bytes — the scroll is no longer scrolling, it's searching_after",
-            docs_count,
-            page.len()
-        );
-
-        Ok(Some(page))
     }
 }
 
@@ -259,13 +388,20 @@ impl ElasticsearchSource {
         Ok(())
     }
 
-    /// 📡 Execute a search request with PIT + search_after pagination.
+    /// 📡 Execute search: HTTP stays async, JSON parsing offloaded to spawn_blocking.
     ///
-    /// Returns: (Vec<String>, usize) — (NDJSON lines per hit, total bytes)
-    async fn execute_search(&mut self, batch_size: usize) -> Result<(Vec<String>, usize)> {
+    /// Phase split: (1) build request body, (2) send/receive HTTP, (3) parse on blocking thread.
+    /// At batch_size=10K, the parse phase was burning 10K json!() + to_string() cycles inline
+    /// on the tokio executor. Now it runs on a dedicated thread with zero-copy RawValue deserialization.
+    ///
+    /// Returns None when hits are empty (EOF signal for pump).
+    async fn execute_search(
+        &mut self,
+        batch_size: usize,
+    ) -> Result<Option<ParsedSearchResult>> {
         let search_url = format!("{}/_search", self.config.url.trim_end_matches('/'));
 
-        // 🏗️ Build the search body
+        // 🏗️ Build the search body — trivial CPU, stays on async thread
         let query = match &self.config.query {
             Some(q) => serde_json::from_str(q)
                 .context("💀 The query filter is not valid JSON. Check your syntax.")?,
@@ -295,6 +431,7 @@ impl ElasticsearchSource {
         let search_body_str =
             serde_json::to_string(&search_body).context("💀 Failed to serialize search body.")?;
 
+        // 📡 HTTP send + receive — async, where it belongs
         let mut request = self
             .client
             .post(&search_url)
@@ -319,51 +456,15 @@ impl ElasticsearchSource {
             .text()
             .await
             .context("💀 Search response body could not be read.")?;
-        let body: Value = serde_json::from_str(&response_text)
-            .context("💀 Search response was not valid JSON.")?;
 
-        // 🔖 Update PIT ID (may be refreshed)
-        if let Some(new_pit_id) = body["pit_id"].as_str() {
-            self.pit_id = Some(new_pit_id.to_string());
-        }
+        // 🧵 Offload CPU-heavy JSON parsing to a blocking thread.
+        // At 10K docs, this is 10K deserialize+write cycles — too much for tokio's event loop.
+        // spawn_blocking moves it to the blocking thread pool where it can't starve IO tasks.
+        let parsed = tokio::task::spawn_blocking(move || parse_search_response(&response_text))
+            .await
+            .context("💀 spawn_blocking panicked during search response parsing. The thread had an existential crisis.")??;
 
-        // 📦 Extract hits
-        let hits = body["hits"]["hits"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("💀 Search response missing hits.hits array."))?;
-
-        if hits.is_empty() {
-            return Ok((Vec::new(), 0));
-        }
-
-        // 🔄 Update search_after cursor
-        if let Some(sort_values) = hits.last().and_then(|h| h["sort"].as_array()) {
-            self.search_after = Some(sort_values.clone());
-        }
-
-        // 📄 Build NDJSON lines — preserves _id, _index, _source
-        let mut lines = Vec::with_capacity(hits.len());
-        let mut total_bytes = 0usize;
-
-        for hit in hits {
-            let hit_line = serde_json::json!({
-                "_id": hit["_id"],
-                "_index": hit["_index"],
-                "_source": hit["_source"]
-            });
-            let line = serde_json::to_string(&hit_line)
-                .context("💀 Failed to serialize hit. The irony is not lost on us.")?;
-            total_bytes += line.len();
-            lines.push(line);
-        }
-
-        trace!(
-            "📡 ES search returned {} hits, {} bytes",
-            lines.len(),
-            total_bytes
-        );
-
-        Ok((lines, total_bytes))
+        Ok(parsed)
     }
 
     /// 🗑️ Clean up the PIT — delete the point-in-time snapshot.
@@ -479,5 +580,124 @@ mod tests {
         let config: ElasticsearchSourceConfig =
             serde_json::from_str(json).expect("💀 Config deserialization failed.");
         assert!(config.index.is_none());
+    }
+
+    /// 🧪 parse_search_response extracts pit_id, hits, search_after — the full monty.
+    /// "I see dead allocations." — The Sixth Sense, if it was about memory profiling 🦆
+    #[test]
+    fn the_one_where_parse_search_response_extracts_all_fields() {
+        // 📡 Realistic ES response with 2 hits, PIT ID, and sort values
+        let response_json = r#"{
+            "pit_id": "refreshed_pit_abc123",
+            "hits": {
+                "total": {"value": 42, "relation": "eq"},
+                "hits": [
+                    {
+                        "_id": "doc1",
+                        "_index": "my-index",
+                        "_source": {"name": "Alice", "age": 30},
+                        "sort": [1]
+                    },
+                    {
+                        "_id": "doc2",
+                        "_index": "my-index",
+                        "_source": {"name": "Bob", "age": 25},
+                        "sort": [2]
+                    }
+                ]
+            }
+        }"#;
+
+        let result = parse_search_response(response_json)
+            .expect("💀 Parse failed on perfectly good JSON")
+            .expect("💀 Got None but expected Some — the hits were right there");
+
+        assert_eq!(result.doc_count, 2, "📊 Expected 2 docs in this page");
+        assert_eq!(
+            result.new_pit_id.as_deref(),
+            Some("refreshed_pit_abc123"),
+            "🔖 PIT ID should be extracted"
+        );
+        assert!(
+            result.new_search_after.is_some(),
+            "🔄 search_after cursor should exist"
+        );
+
+        // 📄 Verify NDJSON page structure — 2 lines, newline separated
+        let lines: Vec<&str> = result.page.split('\n').collect();
+        assert_eq!(lines.len(), 2, "📄 Should be 2 NDJSON lines");
+
+        // 🔍 Each line should be valid JSON with _id, _index, _source
+        for line in &lines {
+            let parsed: Value = serde_json::from_str(line)
+                .expect("💀 Hit line is not valid JSON. The write!() macro betrayed us.");
+            assert!(parsed.get("_id").is_some(), "🎯 Hit must have _id");
+            assert!(parsed.get("_index").is_some(), "🎯 Hit must have _index");
+            assert!(parsed.get("_source").is_some(), "🎯 Hit must have _source");
+        }
+
+        // 📊 page_bytes should match the sum of individual line lengths
+        let expected_bytes: usize = lines.iter().map(|l| l.len()).sum();
+        assert_eq!(
+            result.page_bytes, expected_bytes,
+            "📊 page_bytes should equal sum of line lengths"
+        );
+    }
+
+    /// 🧪 RawValue borrows _source without parsing its internals — zero-copy proof.
+    /// The _source could be a megabyte of nested JSON and we don't care.
+    /// We just pass it through like a relay runner with a baton. 🏃
+    #[test]
+    fn the_one_where_raw_value_borrows_source_without_parsing() {
+        // 📦 _source contains deeply nested JSON — RawValue shouldn't touch it
+        let response_json = r#"{
+            "hits": {
+                "hits": [
+                    {
+                        "_id": "complex-doc",
+                        "_index": "nested-index",
+                        "_source": {"level1": {"level2": {"level3": [1,2,3], "deep": true}}},
+                        "sort": [99]
+                    }
+                ]
+            }
+        }"#;
+
+        let result = parse_search_response(response_json)
+            .expect("💀 Parse failed")
+            .expect("💀 Got None");
+
+        // 🔍 The _source should pass through verbatim — no re-ordering, no re-formatting
+        let parsed: Value =
+            serde_json::from_str(&result.page).expect("💀 Page line is not valid JSON");
+        let source = &parsed["_source"];
+        assert_eq!(source["level1"]["level2"]["level3"][0], 1);
+        assert_eq!(source["level1"]["level2"]["deep"], true);
+        assert_eq!(result.doc_count, 1);
+        assert!(
+            result.new_pit_id.is_none(),
+            "🔖 No pit_id in response = None"
+        );
+    }
+
+    /// 🧪 Empty hits returns None — the EOF signal that pump() checks for.
+    /// "Nothing to see here. Move along." — Every empty response ever 🦆
+    #[test]
+    fn the_one_where_empty_hits_returns_none() {
+        let response_json = r#"{
+            "pit_id": "still_valid_pit",
+            "hits": {
+                "total": {"value": 0, "relation": "eq"},
+                "hits": []
+            }
+        }"#;
+
+        let result = parse_search_response(response_json)
+            .expect("💀 Parse failed on empty response");
+
+        assert!(
+            result.is_none(),
+            "📭 Empty hits should return None, not an empty page"
+        );
     }
 }

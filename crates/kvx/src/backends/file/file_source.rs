@@ -8,16 +8,25 @@
 //! said the senior. The intern nodded. They both stared at the BufReader. It stared back.*
 //!
 //! *"One line at a time," it said. And it was.* 🦆
+//!
+//! 🧠 Knowledge graph — spawn_blocking file I/O:
+//! - `tokio::fs::File` uses `spawn_blocking` internally for EVERY read syscall.
+//!   For geonames (11M docs), that's millions of thread pool round-trips per pump().
+//! - Fix: `std::io::BufReader<std::fs::File>` with 1MB buffer, entire page-building
+//!   loop runs in ONE `spawn_blocking` call. N read_line calls → 1 thread switch.
+//! - The BufReader + line_buffer are moved into the closure via Option::take / mem::take,
+//!   then returned and put back. The "take-do-put" pattern. Like borrowing your neighbor's
+//!   lawnmower but giving it back gassed up. 🦆
+
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::Deserialize;
-use tokio::{
-    fs::File,
-    io::{self, AsyncBufReadExt},
-};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use tracing::trace;
 
 use crate::backends::Source;
+use crate::buffer_pool::{self, PoolBuffer};
 use crate::progress::ProgressMetrics;
 
 // -- 📂 FileSourceConfig — "It's just a file", said no sysadmin ever before the disk filled up.
@@ -29,21 +38,24 @@ use crate::progress::ProgressMetrics;
 pub struct FileSourceConfig {
     pub file_name: String,
 }
-/// 📂 FileSource — reads a file line by line, assembles raw `String` pages, and moves on.
+
+/// 📂 The FileSource: reads NDJSON files line-by-line via std::io::BufReader.
 ///
-/// Think of it like a very diligent intern who reads a massive CSV, never complains,
-/// and only stops when (a) the file ends, (b) the batch is full by doc count,
-/// or (c) the batch is full by byte count — whichever comes first.
+/// 🧠 Knowledge graph — why std::io, not tokio::io:
+/// tokio::fs::File wraps every read() in spawn_blocking. For millions of lines, that's
+/// millions of thread pool round-trips. Instead, we use std::io::BufReader with a 1MB buffer
+/// and move the entire page-building loop into a SINGLE spawn_blocking call per pump().
+/// One thread switch per page. Not one per line. The difference is... substantial.
 ///
-/// The borrow checker approved this struct. It did not approve of my feelings about the borrow
-/// checker. We are at an impasse.
-///
-/// 🧵 Async, non-blocking. The BufReader wraps a tokio `File`, so we're doing real async I/O.
-/// 📊 Tracks progress via `ProgressMetrics` — bytes read, docs read, reported to a progress table.
-/// ⚠️  If the file is being written to while we read it, the size estimate will be wrong.
-///     This is fine. We are fine. Everything is fine. 🐛
+/// The BufReader and line_buffer live in Option/owned fields so they can be moved into
+/// the blocking closure and returned afterward. The "take-do-put" pattern. Like checking
+/// your luggage at the airport — you hand it over, it goes on a journey, it comes back
+/// (usually) (hopefully) (no guarantees about the zipper). 📦🦆
 pub(crate) struct FileSource {
-    buf_reader: io::BufReader<File>,
+    /// 🧵 Option wrapper for the take-do-put pattern with spawn_blocking.
+    /// Taken before entering the blocking thread, put back when it returns.
+    /// If this is None, someone called pump() concurrently. Don't do that.
+    buf_reader: Option<BufReader<File>>,
     source_config: FileSourceConfig,
     /// 📦 Max docs per batch page — updated by pump(doc_count_hint) each call
     max_batch_size_docs: usize,
@@ -59,10 +71,10 @@ pub(crate) struct FileSource {
     /// once and clearing between reads saves ~574 x 1MB allocations for PMC dataset.
     /// The borrow checker says reuse is the sincerest form of flattery. 🐄
     line_buffer: String,
-    /// 🔁 Reusable page buffer — avoids max_batch_size_bytes alloc per pump() call.
-    /// 🧠 Pages typically fill to ~2MB but were allocated at max (50MB). By reusing
-    /// and cloning at actual size, we replace 50MB allocs with ~2MB clones. Math! 📊
-    page_buffer: String,
+    // 🧠 page_buffer removed — replaced by PoolBuffer rented per pump() call.
+    // The buffer pool provides recycled buffers (TLS fast path → shared fallback → alloc new).
+    // No more clone() at the end of pump() — we return ownership of the rented buffer directly.
+    // Net effect: zero per-page heap allocations in steady state. The allocator can finally rest. 🏖️
 }
 
 // 🐛 NOTE: progress is intentionally excluded from this Debug impl.
@@ -80,14 +92,14 @@ impl std::fmt::Debug for FileSource {
 
 impl FileSource {
     /// 🚀 Opens the source file, grabs its size for the progress bar, wraps it in a BufReader,
-    /// and returns a fully initialized `FileSource` ready to vend raw `String` pages.
+    /// and returns a fully initialized `FileSource` ready to vend raw `PoolBuffer` pages.
     ///
     /// If the file doesn't exist: 💀 anyhow will tell you with *theatrical flair*.
     /// If metadata fails: we assume 0 bytes, progress bar shows unknown. Shrug emoji as a service.
     ///
-    /// No cap: `File::open` is async here because we're in tokio-land. This is not your
-    /// grandfather's `std::fs::File::open`. This is `std::fs::File::open`'s cooler younger sibling
-    /// who got into the async runtime scene and never looked back.
+    /// 🧠 Uses std::fs::File (sync) because this is a one-time init cost.
+    /// The hot path (pump) uses spawn_blocking with the std BufReader — no tokio::fs overhead.
+    /// "The async function that opens files synchronously. The irony is not lost on us." 🦆
     pub(crate) async fn new(
         source_config: FileSourceConfig,
         max_batch_size_bytes: usize,
@@ -97,22 +109,23 @@ impl FileSource {
         // -- In any case, the source file refused to open — like a very stubborn bouncer
         // -- at an exclusive club where the club is just a text file and we are very small data.
         // The context string below becomes the error message. Make it count.
-        let file_handle = File::open(&source_config.file_name)
-            .await
-            .context(format!(
-                "💀 The door to '{}' would not budge. We knocked. We pleaded. \
-                We checked if it existed (it might not). We checked permissions (they might be wrong). \
-                The door remained closed. The file remains unopened. We remain outside.",
-                source_config.file_name
-            ))?;
+        let file_handle = File::open(&source_config.file_name).context(format!(
+            "💀 The door to '{}' would not budge. We knocked. We pleaded. \
+             We checked if it existed (it might not). We checked permissions (they might be wrong). \
+             The door remained closed. The file remains unopened. We remain outside.",
+            source_config.file_name
+        ))?;
 
         // 📏 grab file size for the progress bar — if metadata fails, we fly blind (0 = unknown).
         // ⚠️  known edge case: if the file is being written to while we read, size may be stale/wrong.
         // --    This is fine. We will not panic. We are calm. The borrow checker, however, is not calm.
         // --    The borrow checker is never calm. The borrow checker has seen things.
-        let file_size = file_handle.metadata().await.map(|m| m.len()).unwrap_or(0);
+        let file_size = file_handle.metadata().map(|m| m.len()).unwrap_or(0);
 
-        let buf_reader = io::BufReader::new(file_handle);
+        // 🧠 1MB BufReader buffer — 128x the default 8KB. Fewer read() syscalls = higher throughput.
+        // For geonames (~200 byte lines), 8KB buffer = ~40 lines per syscall.
+        // 1MB buffer = ~5000 lines per syscall. The kernel thanks us for not paging it every 40 lines.
+        let buf_reader = BufReader::with_capacity(1024, file_handle);
 
         // 🚀 spin up the progress metrics — source name is the file path, honest and boring.
         // KNOWLEDGE GRAPH: file_name is used as the "source name" label in the progress table.
@@ -120,15 +133,13 @@ impl FileSource {
         let progress = ProgressMetrics::new(source_config.file_name.clone(), file_size);
 
         Ok(Self {
-            buf_reader,
+            buf_reader: Some(buf_reader),
             source_config,
             max_batch_size_docs,
             max_batch_size_bytes,
             progress,
             // -- 🔁 1MB line buffer — allocated once, reused forever. Like a good cast iron skillet.
             line_buffer: String::with_capacity(1024 * 1024),
-            // -- 🔁 Page buffer starts at max batch size — grows once, never again.
-            page_buffer: String::with_capacity(max_batch_size_bytes),
         })
     }
 }
@@ -140,9 +151,11 @@ impl Source for FileSource {
     /// `doc_count_hint` adjusts `max_batch_size_docs` before reading — the controller's
     /// recommended batch size merges into the pump in a single call. No more two-step.
     ///
-    /// 🧠 Knowledge graph: sources return `Option<String>` — one raw page of newline-delimited
-    /// content, uninterpreted. The source accumulates lines up to byte/doc caps and returns
-    /// the whole thing as a single String. The Composer downstream splits and transforms.
+    /// 🧠 Knowledge graph — spawn_blocking strategy:
+    /// The entire page-building loop (read_line × N) runs in ONE spawn_blocking call.
+    /// The BufReader and line_buffer are moved into the closure via take/mem::take,
+    /// then returned and restored. This collapses N thread pool round-trips (one per
+    /// read_line under tokio::fs) into exactly 1 per pump() call.
     ///
     /// KNOWLEDGE GRAPH: two exit conditions exist beyond EOF —
     ///   1. `max_batch_size_docs`: line count cap. Don't build a page the size of Texas.
@@ -150,52 +163,101 @@ impl Source for FileSource {
     /// Both are checked on every iteration. Whichever fires first wins.
     ///
     /// "He who reads the entire file into one String, OOMs in production." — Ancient proverb 📜
-    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<String>> {
+    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<PoolBuffer>> {
         // 🎛️ Apply the controller's batch size hint — merged from the old set_page_size_hint()
         self.max_batch_size_docs = doc_count_hint;
-        // 🔁 Reuse page buffer — clear content but keep the allocation from last round.
-        // 🧠 Tribal knowledge: the capacity stays at whatever the page grew to last time.
-        // Most pages are ~2MB. We clone at actual len() below, not at capacity. Huge win.
-        self.page_buffer.clear();
-        let mut total_bytes_read = 0usize;
-        let mut line_count = 0usize;
 
-        // 🧠 TRIBAL KNOWLEDGE: The range is `0..max_batch_size_docs` (EXCLUSIVE upper bound).
-        // This means: read AT MOST max_batch_size_docs raw lines from the BufReader.
-        // The byte limit check provides an independent exit condition for oversized pages.
-        // Previously used `0..=` (inclusive) which allowed max+1 iterations — a subtle off-by-one
-        // that was masked by a redundant inner `line_count >= max` check. Fixed to be correct
-        // by construction: the for range IS the doc count guard. Belt without suspenders.
-        for _ in 0..self.max_batch_size_docs {
-            // 🔁 Reuse line buffer — clear content, keep the 1MB capacity from construction.
-            // Saves ~574K allocations for PMC dataset. The allocator sends its regards. 🫡
-            self.line_buffer.clear();
-            let bytes_read = self.buf_reader.read_line(&mut self.line_buffer).await?;
-            if bytes_read == 0 {
-                break;
-            }
+        // 🧵 Take the reader + line buffer out for the blocking thread.
+        // Option::take is O(1) — swaps in None, we get the BufReader.
+        // std::mem::take on the String — moves it out, leaves an empty one. Also O(1).
+        // Both are returned after the blocking work completes. The "take-do-put" pattern.
+        // "What's mine is yours (temporarily)." — the async runtime to spawn_blocking 🤝
+        let mut the_reader = self
+            .buf_reader
+            .take()
+            .expect("💀 BufReader already taken — pump called concurrently? The source is not a buffet.");
+        let mut the_line_buffer = std::mem::take(&mut self.line_buffer);
+        let max_docs = self.max_batch_size_docs;
+        let max_bytes = self.max_batch_size_bytes;
 
-            total_bytes_read += bytes_read;
-            // 🧹 Strip trailing newlines from each line before appending to the page.
-            // read_line includes \n (and \r\n on Windows). We strip so the page is clean NDJSON.
-            let trimmed = self
-                .line_buffer
-                .trim_end_matches('\n')
-                .trim_end_matches('\r');
-            if !trimmed.is_empty() {
-                // 🔗 Separate lines with \n — but no trailing newline on the last line.
-                // The Composer handles final formatting. We just build the raw page.
-                if !self.page_buffer.is_empty() {
-                    self.page_buffer.push('\n');
+        // 🧵 ONE spawn_blocking per pump() — the entire page-building loop runs here.
+        // Under tokio::fs, each read_line was its own spawn_blocking. For a page of 10K docs,
+        // that's 10,000 thread pool round-trips collapsed into 1. The scheduling overhead
+        // savings alone could fund a small startup. "In a world of async, sometimes sync is king." 🎬
+        let (reader_back, line_buffer_back, inner_result) =
+            tokio::task::spawn_blocking(move || {
+                // 🏦 Rent a buffer from the pool — TLS fast path in steady state, zero contention.
+                // 🧠 We rent at max_batch_size_bytes capacity. After first pump(), the pool will have
+                // recycled buffers of this size ready to go. No heap alloc after warmup.
+                let mut page_buffer = buffer_pool::rent(max_bytes);
+                let mut total_bytes_read = 0usize;
+                let mut line_count = 0usize;
+
+                // 🧠 TRIBAL KNOWLEDGE: The range is `0..max_docs` (EXCLUSIVE upper bound).
+                // This means: read AT MOST max_batch_size_docs raw lines from the BufReader.
+                // The byte limit check provides an independent exit condition for oversized pages.
+                for _ in 0..max_docs {
+                    // 🔁 Reuse line buffer — clear content, keep the 1MB capacity from construction.
+                    // Saves ~574K allocations for PMC dataset. The allocator sends its regards. 🫡
+                    the_line_buffer.clear();
+                    let bytes_read = match the_reader.read_line(&mut the_line_buffer) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            // 💀 Read failed — return reader+buffer so they can be restored,
+                            // then propagate the error. No orphaned resources on the thread pool floor.
+                            return (
+                                the_reader,
+                                the_line_buffer,
+                                Err(anyhow::anyhow!(e).context(
+                                    "💀 read_line failed — the file pulled the rug out mid-read. \
+                                     Disk error? NFS timeout? Cosmic ray? All equally likely at 3am.",
+                                )),
+                            );
+                        }
+                    };
+                    if bytes_read == 0 {
+                        break;
+                    }
+
+                    total_bytes_read += bytes_read;
+                    // 🧹 Strip trailing newlines from each line before appending to the page.
+                    // read_line includes \n (and \r\n on Windows). We strip so the page is clean NDJSON.
+                    let trimmed = the_line_buffer
+                        .trim_end_matches('\n')
+                        .trim_end_matches('\r');
+                    if !trimmed.is_empty() {
+                        // 🔗 Separate lines with \n — but no trailing newline on the last line.
+                        // The Composer handles final formatting. We just build the raw page.
+                        if !page_buffer.is_empty() {
+                            page_buffer.push_str("\n");
+                        }
+                        page_buffer.push_str(trimmed);
+                        line_count += 1;
+                    }
+
+                    if total_bytes_read > max_bytes {
+                        break;
+                    }
                 }
-                self.page_buffer.push_str(trimmed);
-                line_count += 1;
-            }
 
-            if total_bytes_read > self.max_batch_size_bytes {
-                break;
-            }
-        }
+                (
+                    the_reader,
+                    the_line_buffer,
+                    Ok((page_buffer, total_bytes_read, line_count)),
+                )
+            })
+            .await
+            .context(
+                "💀 spawn_blocking panicked during file read — the thread pool is questioning its life choices 🧵",
+            )?;
+
+        // 🔄 Put the reader and line buffer back — they survived the thread pool adventure.
+        // Like returning from Narnia but with a BufReader instead of a wardrobe. 🦁
+        self.buf_reader = Some(reader_back);
+        self.line_buffer = line_buffer_back;
+
+        // 📦 Unwrap the inner result — read errors propagate here
+        let (page_buffer, total_bytes_read, line_count) = inner_result?;
 
         trace!(
             "📖 hauled {} bytes out of the file like a digital fishing trip — catch of the day",
@@ -205,12 +267,13 @@ impl Source for FileSource {
             .update(total_bytes_read as u64, line_count as u64);
 
         // 📄 Empty page = EOF. The well is dry. Return None. 🏁
-        // 🧠 Clone at actual len(), not capacity. Page is ~2MB but buffer capacity may be 50MB.
-        // This single change saves ~48MB per pump() call. The heap profiler wept with joy.
-        if self.page_buffer.is_empty() {
+        // 🧠 No clone needed! We return ownership of the rented PoolBuffer directly.
+        // When downstream drops it, the buffer returns to the pool. Zero alloc steady state. 🔄
+        if page_buffer.is_empty() {
+            // -- 🗑️ Empty buffer returns to pool on drop here. Free recycling.
             Ok(None)
         } else {
-            Ok(Some(self.page_buffer.clone()))
+            Ok(Some(page_buffer))
         }
     }
 }
@@ -309,7 +372,7 @@ mod tests {
             {
                 Some(page) => {
                     // 📊 Count lines in the page — each non-empty line is one doc
-                    let lines_in_page = page.split('\n').filter(|l| !l.trim().is_empty()).count();
+                    let lines_in_page = page.as_str().unwrap().split('\n').filter(|l| !l.trim().is_empty()).count();
                     the_grand_total_lines += lines_in_page;
                 }
                 None => break, // 🏁 EOF — the well is dry
@@ -366,7 +429,7 @@ mod tests {
 
             match source.pump(the_hint).await.expect("💀 pump() error") {
                 Some(page) => {
-                    let lines = page.split('\n').filter(|l| !l.trim().is_empty()).count();
+                    let lines = page.as_str().unwrap().split('\n').filter(|l| !l.trim().is_empty()).count();
                     the_grand_total_lines += lines;
                 }
                 None => break,

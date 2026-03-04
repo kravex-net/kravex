@@ -10,6 +10,8 @@
 // -- 🗑️ The blanket allow has been lifted. The compiler sees all now. 👁️
 pub mod app_config;
 pub mod backends;
+pub mod buffer_pool;
+pub mod cache_aligned;
 pub(crate) mod composers;
 pub(crate) mod progress;
 mod supervisors;
@@ -23,6 +25,7 @@ use crate::throttlers::{ControllerBackend, ThrottleControllerBackend};
 use crate::transforms::DocumentTransformer;
 use anyhow::{Context, Result};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -32,6 +35,29 @@ use tracing::info;
 // which propagates to all workers via their clones. Like pulling the fire alarm, but for data. 🔥
 // 🧠 Knowledge graph: run() creates → Supervisor receives → workers clone → stop() cancels.
 static THE_ESCAPE_HATCH: OnceLock<CancellationToken> = OnceLock::new();
+
+// 📊 Bench mode counters — atomic because N sink workers hammer these concurrently.
+// 🧠 These are only meaningful when KVX_BENCH_MODE=1 (set by --bench-seconds).
+// Relaxed ordering is fine — we read these once at the end, not mid-flight for correctness. 🦆
+static BENCH_DOCS_DRAINED: AtomicU64 = AtomicU64::new(0);
+static BENCH_BYTES_DRAINED: AtomicU64 = AtomicU64::new(0);
+static BENCH_START_NANOS: AtomicU64 = AtomicU64::new(0);
+
+// 🔬 Diagnostic counters — interval metrics, reset every 5s by the reporter task.
+// 🧠 Compose = CPU time in Composer.compose(). Drain = wall time in Sink.drain().
+// Source = pages pumped + bytes read. All atomic, all Relaxed, all vibes. 🦆
+static DIAG_COMPOSE_NANOS: AtomicU64 = AtomicU64::new(0);
+static DIAG_COMPOSE_CALLS: AtomicU64 = AtomicU64::new(0);
+static DIAG_DRAIN_NANOS: AtomicU64 = AtomicU64::new(0);
+static DIAG_DRAIN_CALLS: AtomicU64 = AtomicU64::new(0);
+static DIAG_SOURCE_PAGES: AtomicU64 = AtomicU64::new(0);
+static DIAG_SOURCE_BYTES: AtomicU64 = AtomicU64::new(0);
+
+// 📊 Cumulative counters — never reset, accumulate across reporter snapshots.
+// bench_summary() reads these + any remaining un-snapshotted BENCH_* values.
+// 🧠 Without these, bench_summary would read 0 because the reporter resets BENCH_* every 5s.
+static DIAG_CUMULATIVE_DOCS: AtomicU64 = AtomicU64::new(0);
+static DIAG_CUMULATIVE_BYTES: AtomicU64 = AtomicU64::new(0);
 
 /// 🚀 The grand entry point. The big kahuna. The main event.
 pub async fn run(app_config: AppConfig) -> Result<()> {
@@ -139,6 +165,135 @@ pub async fn stop() -> Result<()> {
     Ok(())
 }
 
+/// 📊 Report docs+bytes drained by a sink worker flush.
+/// Called from flush_and_measure() on the hot path — atomic add, no lock, no drama.
+/// "He who counts documents atomically, counts them accurately." — Ancient concurrency proverb 🦆
+pub fn report_docs_drained(doc_count: u64, byte_count: u64) {
+    BENCH_DOCS_DRAINED.fetch_add(doc_count, Ordering::Relaxed);
+    BENCH_BYTES_DRAINED.fetch_add(byte_count, Ordering::Relaxed);
+}
+
+/// 📊 Arm the bench timer — called once at pipeline start when bench mode is active.
+/// Stores the current timestamp as nanos-since-UNIX-epoch. We use this instead of
+/// Instant because Instant can't be stored in an AtomicU64 portably. 🔬
+pub fn bench_arm() {
+    let now_nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    BENCH_START_NANOS.store(now_nanos, Ordering::Relaxed);
+}
+
+/// 🔬 Cached bench mode check — O(1) after first call. Reads KVX_BENCH_MODE env var once,
+/// caches result in OnceLock. Every subsequent call is a pointer deref + bool load.
+/// "He who checks env vars in a hot loop, deserves the latency he gets." — Ancient proverb 🦆
+pub fn is_bench_mode() -> bool {
+    static THE_CACHED_ANSWER: OnceLock<bool> = OnceLock::new();
+    *THE_CACHED_ANSWER.get_or_init(|| std::env::var("KVX_BENCH_MODE").is_ok())
+}
+
+/// 🔬 A frozen moment in diagnostic time — the counters between two reporter ticks.
+/// All values represent a 5-second interval (or whatever the reporter period is).
+/// 🧠 swap(0) atomically reads and resets — no lost increments, no torn reads, no drama.
+pub struct DiagSnapshot {
+    pub compose_nanos: u64,
+    pub compose_calls: u64,
+    pub drain_nanos: u64,
+    pub drain_calls: u64,
+    pub source_pages: u64,
+    pub source_bytes: u64,
+    pub docs_drained: u64,
+    pub bytes_drained: u64,
+}
+
+/// 🔬 Report compose timing from a sink worker flush.
+/// Called after composer.compose() — measures CPU time in transform+assemble. 🎼
+pub fn diag_report_compose(nanos: u64) {
+    DIAG_COMPOSE_NANOS.fetch_add(nanos, Ordering::Relaxed);
+    DIAG_COMPOSE_CALLS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 🔬 Report drain timing from a sink worker flush.
+/// Called after sink.drain() — measures wall time waiting on ES/OS bulk response. 📡
+pub fn diag_report_drain(nanos: u64) {
+    DIAG_DRAIN_NANOS.fetch_add(nanos, Ordering::Relaxed);
+    DIAG_DRAIN_CALLS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 🔬 Report a page pumped from the source.
+/// Called after source.pump() returns Some(page). Counts pages + bytes for src throughput. 🚰
+pub fn diag_report_source_page(bytes: u64) {
+    DIAG_SOURCE_PAGES.fetch_add(1, Ordering::Relaxed);
+    DIAG_SOURCE_BYTES.fetch_add(bytes, Ordering::Relaxed);
+}
+
+/// 🔬 Atomically snapshot all interval counters and reset them to zero.
+/// swap(0) is the secret — reads the current value and sets to 0 in one atomic op.
+/// No lost increments between read and reset. No mutex. No tears.
+/// Also accumulates docs/bytes into DIAG_CUMULATIVE_* so bench_summary() stays correct. 🧠
+pub fn diag_snapshot_and_reset() -> DiagSnapshot {
+    // -- 🔄 Swap the bench counters first — these feed the cumulative totals
+    let docs = BENCH_DOCS_DRAINED.swap(0, Ordering::Relaxed);
+    let bytes = BENCH_BYTES_DRAINED.swap(0, Ordering::Relaxed);
+    // -- 📊 Accumulate into cumulative so bench_summary() can read the grand total
+    DIAG_CUMULATIVE_DOCS.fetch_add(docs, Ordering::Relaxed);
+    DIAG_CUMULATIVE_BYTES.fetch_add(bytes, Ordering::Relaxed);
+
+    DiagSnapshot {
+        compose_nanos: DIAG_COMPOSE_NANOS.swap(0, Ordering::Relaxed),
+        compose_calls: DIAG_COMPOSE_CALLS.swap(0, Ordering::Relaxed),
+        drain_nanos: DIAG_DRAIN_NANOS.swap(0, Ordering::Relaxed),
+        drain_calls: DIAG_DRAIN_CALLS.swap(0, Ordering::Relaxed),
+        source_pages: DIAG_SOURCE_PAGES.swap(0, Ordering::Relaxed),
+        source_bytes: DIAG_SOURCE_BYTES.swap(0, Ordering::Relaxed),
+        docs_drained: docs,
+        bytes_drained: bytes,
+    }
+}
+
+/// 📊 Print the bench summary — docs/min, bytes/sec, total docs, elapsed seconds.
+/// Called once after the pipeline completes (or after --bench-seconds timeout).
+/// "The numbers, Mason. What do they mean?" — Black Ops, but for throughput metrics 🎮🦆
+pub fn bench_summary() {
+    let start_nanos = BENCH_START_NANOS.load(Ordering::Relaxed);
+    if start_nanos == 0 {
+        return; // -- 🤷 bench_arm() was never called. nothing to report. ghost metrics.
+    }
+    let now_nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    let elapsed_secs = (now_nanos.saturating_sub(start_nanos)) as f64 / 1_000_000_000.0;
+    // 🧠 Cumulative (from reporter resets) + remaining (not yet snapshotted by reporter).
+    // Without this, bench_summary would read near-zero because the reporter swap(0)s every 5s.
+    let total_docs = DIAG_CUMULATIVE_DOCS.load(Ordering::Relaxed)
+        + BENCH_DOCS_DRAINED.load(Ordering::Relaxed);
+    let total_bytes = DIAG_CUMULATIVE_BYTES.load(Ordering::Relaxed)
+        + BENCH_BYTES_DRAINED.load(Ordering::Relaxed);
+
+    let docs_per_sec = if elapsed_secs > 0.0 {
+        total_docs as f64 / elapsed_secs
+    } else {
+        0.0
+    };
+    let docs_per_min = docs_per_sec * 60.0;
+    let mib_per_sec = if elapsed_secs > 0.0 {
+        (total_bytes as f64 / (1024.0 * 1024.0)) / elapsed_secs
+    } else {
+        0.0
+    };
+
+    // 🎯 Print in a machine-parseable AND human-readable format
+    println!("\n📊 === BENCH SUMMARY ===");
+    println!("⏱️  elapsed:    {:.2}s", elapsed_secs);
+    println!("📄 total_docs: {}", total_docs);
+    println!("📦 total_bytes: {} ({:.2} MiB)", total_bytes, total_bytes as f64 / (1024.0 * 1024.0));
+    println!("🚀 docs/sec:   {:.0}", docs_per_sec);
+    println!("🚀 docs/min:   {:.0}", docs_per_min);
+    println!("📡 MiB/sec:    {:.2}", mib_per_sec);
+    println!("📊 === END SUMMARY ===\n");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,6 +317,7 @@ mod tests {
             runtime: RuntimeConfig {
                 queue_capacity: 10,
                 sink_parallelism: 1,
+                transform_parallelism: 1,
             },
             source: SourceConfig::InMemory(()),
             sink: SinkConfig::InMemory(()),
@@ -304,6 +460,7 @@ mod tests {
             runtime: RuntimeConfig {
                 queue_capacity: 8,
                 sink_parallelism: 1,
+                transform_parallelism: 1,
             },
             source: SourceConfig::InMemory(()), // -- dummy, not used by supervisor
             sink: SinkConfig::InMemory(()),
@@ -421,6 +578,7 @@ mod tests {
             runtime: RuntimeConfig {
                 queue_capacity: 16,
                 sink_parallelism: the_sink_parallelism,
+                transform_parallelism: 1,
             },
             source: SourceConfig::InMemory(()),
             sink: SinkConfig::InMemory(()),

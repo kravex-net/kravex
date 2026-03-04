@@ -1,0 +1,22 @@
+# ai
+# geonames_ethos.toml — File → Elasticsearch via ethos (the OG prototype)
+# "Before kravex, there was ethos. Before ethos, there was curl in a for loop."
+# No throttling. No backoff. No transforms. Just raw NDJSON to bulk. The ancestors speak.
+# 🦆 (the duck remembers the before times)
+
+channel_size = 128
+num_sink_workers = 64
+
+[source_config.File]
+file_name = "benchmark/data/geonames.json"
+
+[source_config.File.common_config]
+max_batch_size_bytes = 10485760
+max_batch_size_docs = 10000
+
+[sink_config.Elasticsearch]
+url = "http://localhost:9200"
+index = "benchmark_geonames"
+
+[sink_config.Elasticsearch.common_config]
+max_request_size_bytes = 10485760

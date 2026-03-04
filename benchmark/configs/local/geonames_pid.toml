@@ -5,9 +5,10 @@
 # 🦆 (the duck is a proportional–integral–derivative waterfowl)
 
 [runtime]
-queue_capacity = 32
-sink_parallelism = 64
-
+queue_capacity = 512
+sink_parallelism = 32
+transform_parallelism = 8
+# 10 MiB: 10485760
 [source.File]
 file_name = "benchmark/data/geonames.json"
 
@@ -17,21 +18,14 @@ index = "benchmark_geonames"
 
 [throttle.source]
 max_batch_size_docs = 10000
-max_batch_size_bytes = 33554432
-
-[throttle.source.controller]
-type = "pid_bytes_to_doc_count"
-desired_response_size_bytes = 33554432
-initial_doc_count = 1000
-min_doc_count = 100
-max_doc_count = 10000
+max_batch_size_bytes = 8000000
 
 [throttle.sink]
-max_request_size_bytes = 33554432
+max_request_size_bytes = 8000000
 
 [throttle.sink.mode]
 mode = "Pid"
-set_point_ms = 2000.0
-min_bytes = 1048576
-max_bytes = 10485760
-initial_output_bytes = 10485760
+set_point_ms = 5000.0
+min_bytes = 512000
+max_bytes = 4000000
+initial_output_bytes = 2000000

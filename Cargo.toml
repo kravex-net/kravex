@@ -64,3 +64,8 @@ aws-config = { version = "1", features = ["behavior-version-latest"] }
 # 👏 clap — because parsing CLI args by hand is a form of self-harm
 # that even the borrow checker wouldn't approve of
 clap = { version = "4", features = ["derive"] }
+
+# 🔐 base64 — for pre-computing basic auth headers at init time.
+# because encoding the same credentials 10,000 times per run is
+# the computational equivalent of redialing a number you already saved
+base64 = "0.22"

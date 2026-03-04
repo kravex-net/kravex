@@ -12,12 +12,15 @@
 //! - The compiler monomorphizes each arm; branch prediction eliminates the match
 //!   after a couple iterations. The enum is a formality. The dispatch is basically free.
 //! - Cloning ComposerBackend is free — NdjsonComposer and JsonArrayComposer are zero-sized.
+//! - `compose_page` (test-only) offloads CPU-bound composition to `spawn_blocking` — keeps the
+//!   tokio runtime free for I/O while transforms crunch on dedicated threads.
 //!
 //! 🦆 The duck asked why we need a backend enum when we have trait objects.
 //!    We said "monomorphization." The duck left. It didn't want a lecture.
 
 use super::{Composer, JsonArrayComposer, NdjsonComposer};
 use crate::app_config::SinkConfig;
+use crate::buffer_pool::PoolBuffer;
 use crate::transforms::DocumentTransformer;
 use anyhow::Result;
 
@@ -66,11 +69,39 @@ impl ComposerBackend {
             SinkConfig::InMemory(_) => Self::JsonArray(JsonArrayComposer),
         }
     }
+
+    /// 🧵 Offload page composition to the tokio blocking thread pool.
+    ///
+    /// 🧠 SUPERSEDED: TransformWorker now calls `compose()` directly on a blocking thread.
+    /// This method remains for tests that need the async + spawn_blocking wrapper.
+    /// In production, the entire TransformWorker recv→compose→send loop runs on a single
+    /// blocking thread — no per-page spawn_blocking hop needed.
+    ///
+    /// "You take the blue pill, you stay in the async runtime. You take the red pill,
+    /// you spawn_blocking and I show you how deep the thread pool goes." — Morpheus, probably 🦆
+    #[cfg(test)]
+    pub(crate) async fn compose_page(
+        &self,
+        pages: Vec<PoolBuffer>,
+        transformer: &DocumentTransformer,
+    ) -> Result<PoolBuffer> {
+        use anyhow::Context;
+        let the_composer_clone = self.clone();
+        let the_transformer_clone = transformer.clone();
+
+        tokio::task::spawn_blocking(move || {
+            the_composer_clone.compose(&pages, &the_transformer_clone)
+        })
+        .await
+        .context(
+            "💀 spawn_blocking panicked during compose — the thread pool is having an existential crisis 🧵",
+        )?
+    }
 }
 
 impl Composer for ComposerBackend {
     #[inline]
-    fn compose(&self, pages: &[String], transformer: &DocumentTransformer) -> Result<String> {
+    fn compose(&self, pages: &[PoolBuffer], transformer: &DocumentTransformer) -> Result<PoolBuffer> {
         // -- 🎭 Dispatch to the concrete composer — the match arm that wins is the one that deserves to
         // -- TODO: win the lottery, retire, replace this with a lookup table. Just kidding. This is fine.
         match self {
@@ -83,6 +114,7 @@ impl Composer for ComposerBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer_pool;
     use crate::transforms::passthrough::Passthrough;
 
     // -- 🔧 Passthrough transformer helper — the identity function of the transform world
@@ -125,9 +157,12 @@ mod tests {
     fn backend_the_one_where_compose_dispatches_correctly() -> Result<()> {
         // 🧪 ComposerBackend dispatches to the right concrete composer
         let composer = ComposerBackend::from_sink_config(&SinkConfig::InMemory(()));
-        let pages = vec![String::from(r#"{"a":1}"#), String::from(r#"{"b":2}"#)];
+        let pages = vec![
+            buffer_pool::rent_from_string(String::from(r#"{"a":1}"#)),
+            buffer_pool::rent_from_string(String::from(r#"{"b":2}"#)),
+        ];
         let result = composer.compose(&pages, &passthrough_transformer())?;
-        assert_eq!(result, r#"[{"a":1},{"b":2}]"#);
+        assert_eq!(result.as_str().unwrap(), r#"[{"a":1},{"b":2}]"#);
         Ok(())
     }
 
@@ -149,5 +184,21 @@ mod tests {
             matches!(composer, ComposerBackend::Ndjson(_)),
             "OpenSearch sink → NdjsonComposer: the bulk API speaks NDJSON, always has, always will"
         );
+    }
+
+    /// 🧪 compose_page offloads to spawn_blocking and returns the same result as compose.
+    /// "I used to compose on the main thread... but then I took a spawn_blocking to the knee." 🧵
+    #[tokio::test]
+    async fn backend_the_one_where_compose_page_works_like_compose_but_threaded() -> Result<()> {
+        let composer = ComposerBackend::from_sink_config(&SinkConfig::InMemory(()));
+        let pages = vec![
+            buffer_pool::rent_from_string(String::from(r#"{"a":1}"#)),
+            buffer_pool::rent_from_string(String::from(r#"{"b":2}"#)),
+        ];
+        let result = composer
+            .compose_page(pages, &passthrough_transformer())
+            .await?;
+        assert_eq!(result.as_str().unwrap(), r#"[{"a":1},{"b":2}]"#);
+        Ok(())
     }
 }

@@ -18,6 +18,7 @@ use tokio::{
 use tracing::trace;
 
 use crate::backends::Sink;
+use crate::buffer_pool::PoolBuffer;
 // -- 🚰 FileSinkConfig — cousin of FileSourceConfig, equally traumatized by disk full errors.
 // -- Also lives here, cozy next to its FileSink bestie. No more long-distance config relationships.
 // KNOWLEDGE GRAPH: same co-location principle as above. One backend = one config = one file. Clean.
@@ -81,11 +82,12 @@ impl Sink for FileSink {
     /// The SinkWorker already transformed and binary-collected. We just dump bytes to disk.
     /// No parsing. No iterating over hits. No drama. Just I/O.
     /// "What do you do?" "I write bytes." "That's it?" "That's everything." 🦆
-    async fn drain(&mut self, payload: String) -> Result<()> {
+    async fn drain(&mut self, payload: PoolBuffer) -> Result<()> {
         trace!(
             "📬 payload of {} bytes walked into the file sink — writing it all down",
             payload.len()
         );
+        // 🏦 Borrow bytes from PoolBuffer — written to disk, then buffer returns to pool on drop. 🚀
         self.file_buf.write_all(payload.as_bytes()).await?;
         Ok(())
     }

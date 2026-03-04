@@ -27,6 +27,7 @@ use tokio::io::{self, AsyncBufReadExt, AsyncRead};
 use tracing::trace;
 
 use crate::backends::Source;
+use crate::buffer_pool::{self, PoolBuffer};
 use crate::progress::ProgressMetrics;
 
 // ============================================================
@@ -400,10 +401,11 @@ impl Source for S3RallySource {
     /// Composer handles transform + assembly. We just pump bytes.
     ///
     /// 📜 "He who reads the entire S3 object into one String, pays the OOM tax in production."
-    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<String>> {
+    async fn pump(&mut self, doc_count_hint: usize) -> Result<Option<PoolBuffer>> {
         // 🎛️ Apply the controller's batch size hint — merged from the old set_page_size_hint()
         self.max_batch_size_docs = doc_count_hint;
-        let mut page = String::with_capacity(self.max_batch_size_bytes);
+        // 🏦 Rent a buffer from the pool — recycled in steady state, zero heap alloc after warmup.
+        let mut page = buffer_pool::rent(self.max_batch_size_bytes);
         let mut total_bytes_read = 0usize;
         let mut line_count = 0usize;
         // ⚠️ 1MB initial capacity per line — because Rally JSON documents can be CHONKY.
@@ -423,7 +425,7 @@ impl Source for S3RallySource {
             if !trimmed.is_empty() {
                 // 🔗 Separate lines with \n — no trailing newline. Composer handles the rest.
                 if !page.is_empty() {
-                    page.push('\n');
+                    page.push_str("\n");
                 }
                 page.push_str(trimmed);
                 line_count += 1;
@@ -447,6 +449,7 @@ impl Source for S3RallySource {
             .update(total_bytes_read as u64, line_count as u64);
 
         // 📄 Empty page = stream exhausted. The bucket is empty. The well is dry. Return None. 🏁
+        // 🧠 No clone — we return ownership of the rented PoolBuffer directly. 🔄
         if page.is_empty() {
             Ok(None)
         } else {

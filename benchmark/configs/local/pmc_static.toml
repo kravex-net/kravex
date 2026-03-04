@@ -7,7 +7,7 @@
 
 [runtime]
 queue_capacity = 32
-sink_parallelism = 128
+sink_parallelism = 8
 
 [source.File]
 file_name = "benchmark/data/pmc.json"

@@ -14,6 +14,7 @@
 //! 🦆 The duck asked why we don't use serde. We said "trust the process." It nodded.
 
 use super::Composer;
+use crate::buffer_pool::{self, PoolBuffer};
 use crate::transforms::{DocumentTransformer, Transform};
 use anyhow::Result;
 
@@ -38,12 +39,15 @@ pub(crate) struct JsonArrayComposer;
 
 impl Composer for JsonArrayComposer {
     #[inline]
-    fn compose(&self, pages: &[String], transformer: &DocumentTransformer) -> Result<String> {
+    fn compose(&self, pages: &[PoolBuffer], transformer: &DocumentTransformer) -> Result<PoolBuffer> {
         // -- 📦 First, collect all items from all pages into one flat list
         // -- Must collect before sizing because we need total count for comma math
+        // -- 🧠 Uses transform() (returns Vec<Cow<str>>) because JSON array framing
+        // -- needs item-level granularity for comma placement between items.
         let mut all_items = Vec::new();
         for page in pages {
-            let items = transformer.transform(page)?;
+            let page_str = page.as_str()?;
+            let items = transformer.transform(page_str)?;
             all_items.extend(items);
         }
 
@@ -57,18 +61,18 @@ impl Composer for JsonArrayComposer {
         };
         let estimated_size: usize =
             2 + all_items.iter().map(|s| s.as_ref().len()).sum::<usize>() + commas;
-        let mut payload = String::with_capacity(estimated_size);
-        payload.push('[');
+        let mut payload = buffer_pool::rent(estimated_size);
+        payload.push_str("[");
         for (i, item) in all_items.iter().enumerate() {
             if i > 0 {
                 // -- 🔗 The comma: JSON's way of saying "and there's more where that came from."
                 // -- Without this comma, the JSON validator weeps. With it, it beams with pride.
-                payload.push(',');
+                payload.push_str(",");
             }
             payload.push_str(item.as_ref());
         }
-        payload.push(']');
-        // -- ✅ Valid JSON array. No serde was harmed in the making of this string.
+        payload.push_str("]");
+        // -- ✅ Valid JSON array. No serde was harmed in the making of this PoolBuffer.
         Ok(payload)
     }
 }
@@ -76,6 +80,7 @@ impl Composer for JsonArrayComposer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::buffer_pool;
     use crate::transforms::passthrough::Passthrough;
 
     // -- 🔧 Helper: passthrough transformer — transforms by doing absolutely nothing. Inspirational.
@@ -88,12 +93,12 @@ mod tests {
         // 🧪 Three pages, each passthrough → [page1,page2,page3]
         let composer = JsonArrayComposer;
         let pages = vec![
-            String::from(r#"{"doc":1}"#),
-            String::from(r#"{"doc":2}"#),
-            String::from(r#"{"doc":3}"#),
+            buffer_pool::rent_from_string(String::from(r#"{"doc":1}"#)),
+            buffer_pool::rent_from_string(String::from(r#"{"doc":2}"#)),
+            buffer_pool::rent_from_string(String::from(r#"{"doc":3}"#)),
         ];
         let result = composer.compose(&pages, &passthrough_transformer())?;
-        assert_eq!(result, r#"[{"doc":1},{"doc":2},{"doc":3}]"#);
+        assert_eq!(result.as_str().unwrap(), r#"[{"doc":1},{"doc":2},{"doc":3}]"#);
         Ok(())
     }
 
@@ -102,7 +107,7 @@ mod tests {
         // 🧪 No pages → []. Still valid JSON. Still technically correct. The best kind of correct.
         let composer = JsonArrayComposer;
         let result = composer.compose(&[], &passthrough_transformer())?;
-        assert_eq!(result, "[]");
+        assert_eq!(result.as_str().unwrap(), "[]");
         Ok(())
     }
 
@@ -110,9 +115,9 @@ mod tests {
     fn json_array_the_one_where_single_page_has_no_commas() -> Result<()> {
         // 🧪 One page, no commas. Like a party with one guest. Awkward but valid.
         let composer = JsonArrayComposer;
-        let pages = vec![String::from(r#"{"lonely":true}"#)];
+        let pages = vec![buffer_pool::rent_from_string(String::from(r#"{"lonely":true}"#))];
         let result = composer.compose(&pages, &passthrough_transformer())?;
-        assert_eq!(result, r#"[{"lonely":true}]"#);
+        assert_eq!(result.as_str().unwrap(), r#"[{"lonely":true}]"#);
         Ok(())
     }
 }

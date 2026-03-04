@@ -13,6 +13,7 @@
 //! 🦆 The duck asked what NDJSON stands for. We told it. It left anyway.
 
 use super::Composer;
+use crate::buffer_pool::{self, PoolBuffer};
 use crate::transforms::{DocumentTransformer, Transform};
 use anyhow::Result;
 
@@ -37,24 +38,24 @@ pub(crate) struct NdjsonComposer;
 
 impl Composer for NdjsonComposer {
     #[inline]
-    fn compose(&self, pages: &[String], transformer: &DocumentTransformer) -> Result<String> {
+    fn compose(&self, pages: &[PoolBuffer], transformer: &DocumentTransformer) -> Result<PoolBuffer> {
         // -- 🧮 Pre-allocate based on total page bytes + per-doc overhead estimate.
         // -- 🧠 +64 per doc (not per page!) accounts for ES bulk action lines.
         // -- Count newlines to estimate doc count. Off-by-one is fine — over-estimate > realloc.
         let estimated_size: usize = pages
             .iter()
             .map(|p| {
-                let the_doc_count_guess = p.bytes().filter(|&b| b == b'\n').count() + 1;
+                let the_doc_count_guess = p.as_bytes().iter().filter(|&&b| b == b'\n').count() + 1;
                 p.len() + (the_doc_count_guess * 64)
             })
             .sum();
-        let mut payload = String::with_capacity(estimated_size);
+        let mut payload = buffer_pool::rent(estimated_size);
 
         for page in pages {
-            // -- 🚀 Stream transform directly into the payload buffer.
-            // -- Passthrough: default impl (push_str + \n). ES bulk: streaming override (no Vec<Cow>).
-            // -- Old code: transform() → Vec<Cow<str>> → iterate → push_str. Two middlemen eliminated.
-            transformer.transform_into_ndjson(page, &mut payload)?;
+            // -- 🚀 Stream transform directly into the payload PoolBuffer.
+            // -- Passthrough: memcpy + \n. ES bulk: streaming override (no Vec<Cow>).
+            // -- Zero String allocations — PoolBuffer all the way down. 🏊
+            transformer.transform_into_pool_buffer(page, &mut payload)?;
         }
 
         // -- ✅ Trailing \n included — ES bulk requires it, files appreciate it, nobody complains.
@@ -77,9 +78,9 @@ mod tests {
     fn ndjson_the_one_where_single_page_composes_to_ndjson() -> Result<()> {
         // 🧪 One page with content → content + trailing newline
         let composer = NdjsonComposer;
-        let pages = vec![String::from(r#"{"doc":1}"#)];
+        let pages = vec![buffer_pool::rent_from_string(String::from(r#"{"doc":1}"#))];
         let result = composer.compose(&pages, &passthrough_transformer())?;
-        assert_eq!(result, "{\"doc\":1}\n");
+        assert_eq!(result.as_str().unwrap(), "{\"doc\":1}\n");
         Ok(())
     }
 
@@ -87,9 +88,9 @@ mod tests {
     fn ndjson_the_one_where_multiple_pages_compose() -> Result<()> {
         // 🧪 Two pages → two lines, each with trailing \n
         let composer = NdjsonComposer;
-        let pages = vec![String::from(r#"{"doc":1}"#), String::from(r#"{"doc":2}"#)];
+        let pages = vec![buffer_pool::rent_from_string(String::from(r#"{"doc":1}"#)), buffer_pool::rent_from_string(String::from(r#"{"doc":2}"#))];
         let result = composer.compose(&pages, &passthrough_transformer())?;
-        assert_eq!(result, "{\"doc\":1}\n{\"doc\":2}\n");
+        assert_eq!(result.as_str().unwrap(), "{\"doc\":1}\n{\"doc\":2}\n");
         Ok(())
     }
 
@@ -134,13 +135,18 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let pages = vec![page_1, page_2, page_3];
+        let pages = vec![
+            buffer_pool::rent_from_string(page_1),
+            buffer_pool::rent_from_string(page_2),
+            buffer_pool::rent_from_string(page_3)
+        ];
         let the_expected_doc_count = 500;
 
         let payload = composer.compose(&pages, &the_rally_transformer)?;
 
         // 📊 Count ES bulk action lines — each starts with {"index":
         let the_action_line_count = payload
+            .as_str().unwrap()
             .lines()
             .filter(|l| l.starts_with(r#"{"index":"#))
             .count();
@@ -152,7 +158,7 @@ mod tests {
         );
 
         // ✅ Total non-empty lines = 2 * docs (action + source per doc)
-        let the_total_lines = payload.lines().count();
+        let the_total_lines = payload.as_str().unwrap().lines().count();
         assert_eq!(
             the_total_lines,
             the_expected_doc_count * 2,

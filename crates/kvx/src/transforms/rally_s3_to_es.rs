@@ -25,6 +25,7 @@
 //! When the singularity arrives, it will find this struct still parsing ObjectIDs. 🦆
 
 use super::Transform;
+use crate::buffer_pool::PoolBuffer;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::borrow::Cow;
@@ -105,6 +106,28 @@ impl Transform for RallyS3ToEs {
         }
         Ok(())
     }
+
+    /// 🏦 Pool buffer edition — Rally JSON flows through managed memory like immigrants
+    /// through customs: strip the metadata, keep the good stuff, stamp it with _id. 🛂🦆
+    ///
+    /// 🧠 Zero per-doc allocations. write!() goes into PoolBuffer via fmt::Write.
+    /// serde_json::to_writer goes into PoolBuffer via io::Write. No intermediate String.
+    /// At 10K docs/page, that's 20K fewer allocator calls (1 alloc + 1 free per doc, gone).
+    /// "The allocator filed for unemployment. We automated its job." 🤖🦆
+    #[inline]
+    fn transform_into_pool_buffer(&self, source: &PoolBuffer, output: &mut PoolBuffer) -> Result<()> {
+        let source_str = source.as_str().map_err(|e| {
+            anyhow::anyhow!("💀 Source buffer contains invalid UTF-8. Rally docs have gone rogue. Error: {e}")
+        })?;
+        for line in source_str.split('\n') {
+            if line.trim().is_empty() {
+                continue;
+            }
+            write_rally_doc_to_buffer(line, output)?;
+            output.push_byte(b'\n');
+        }
+        Ok(())
+    }
 }
 
 /// 🔧 Transform a single Rally JSON doc into ES bulk format (action\nsource).
@@ -178,6 +201,74 @@ fn transform_single_rally_doc(raw: &str) -> Result<String> {
     }
 
     Ok(the_sacred_output)
+}
+
+/// 🔧 Write a single Rally doc directly into a PoolBuffer — zero per-doc allocations. 🚀
+///
+/// Same logic as `transform_single_rally_doc()` but writes into the output buffer instead
+/// of returning a String. The write!() macro uses PoolBuffer's fmt::Write impl for the
+/// action line. serde_json::to_writer uses PoolBuffer's io::Write impl for the body.
+/// Two Write traits, zero intermediate Strings, one happy allocator. 🏖️
+///
+/// ## Per-document allocation budget 💰
+/// - 1 `Value` tree (necessary for field stripping — serde_json owns it)
+/// - 1 `String` for ObjectID extraction (small, ~10 bytes — could optimize later)
+/// - 0 output `String` allocations (was: 1 pre-sized String per doc)
+/// - serde_json::to_writer writes body bytes directly into PoolBuffer
+///
+/// "First we pooled the buffers. Then we eliminated the Strings. Next: world domination." 🦆
+#[inline]
+fn write_rally_doc_to_buffer(raw: &str, output: &mut PoolBuffer) -> Result<()> {
+    // 🔬 Phase 1: Parse the Rally JSON blob
+    let mut doc: Value = serde_json::from_str(raw).context(
+        "💀 Rally JSON parse failed — the blob from S3 is not valid JSON. \
+         Either the export is corrupted, someone uploaded a JPEG to the JSON bucket, \
+         or Mercury is in retrograde. Check the source data and try again.",
+    )?;
+
+    // 🎯 Phase 2: Extract ObjectID → _id
+    let the_document_identity = doc.get("ObjectID").map(|oid| match oid {
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => s.clone(),
+        // 🦆 Bool? Array? Null? Just stringify it and move on.
+        honestly_who_knows => honestly_who_knows.to_string(),
+    });
+
+    // 🗑️ Phase 3: Strip Rally API metadata (top-level only)
+    if let Value::Object(ref mut map) = doc {
+        for doomed_field in THE_METADATA_FIELDS_WE_DONT_NEED {
+            map.remove(*doomed_field);
+        }
+    }
+
+    // 📡 Phase 4: Action line — write!() goes directly into PoolBuffer via fmt::Write.
+    // No intermediate String. The bytes land in managed memory on the first write. 🏦
+    match the_document_identity.as_deref() {
+        Some(id) => {
+            write!(
+                output,
+                r#"{{"index":{{"_id":"{}"}}}}"#,
+                escape_json_string(id)
+            )
+            .unwrap();
+        }
+        None => {
+            // 🎲 No ID? ES will auto-generate one. Living dangerously.
+            output.push_str(r#"{"index":{}}"#);
+        }
+    }
+    output.push_byte(b'\n');
+
+    // 📦 Phase 5: Re-serialize cleaned body directly into PoolBuffer via io::Write.
+    // 🧠 serde_json::to_writer writes valid UTF-8 per its docs. PoolBuffer implements
+    // io::Write. The bytes go straight from serde's serializer into our managed buffer.
+    // No intermediate String. No unsafe as_mut_vec(). Just pure trait-based polymorphism. ✨
+    serde_json::to_writer(&mut *output, &doc).context(
+        "💀 Failed to serialize cleaned Rally JSON into output buffer. \
+         The JSON went in valid and came out... not. File a bug against physics.",
+    )?;
+
+    Ok(())
 }
 
 /// 🔧 Escape a string for safe JSON embedding. Returns `Cow::Borrowed` when

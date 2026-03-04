@@ -16,7 +16,8 @@ CLI interface for kravex — run migrations from the command line with clap-powe
 - **Config resolution**: TOML base → CLI overrides applied on top
 - **Source of truth**: `kvx::transforms::supported_flows()` → drives `list-flows` output
 - **Drift detection**: test in transforms.rs ensures `supported_flows()` ↔ `from_configs()` parity
-- **Test count**: 9 (kvx-cli crate); 126 total across workspace
+- **Test count**: 9 (kvx-cli crate); 143 total across workspace (134 kvx + 9 kvx-cli)
+- **New flag**: `--bench-seconds N` — throughput measurement mode; runs migration for N seconds then prints `bench_summary()` (docs/sec, MB/sec, elapsed)
 
 # Key Concepts
 
@@ -27,12 +28,16 @@ CLI interface for kravex — run migrations from the command line with clap-powe
 - `kvx::stop()` wired to `Ctrl+C` for graceful shutdown via `CancellationToken`
 - InMemory source/sink: hidden from help/list-flows, available via `--source inmemory`
 - Claude Code skill: `.claude/commands/kvx.md` — interactive migration setup
+- **`--bench-seconds N`**: atomic counters track docs + bytes processed; `bench_summary()` prints throughput report on exit — zero overhead when not in bench mode
 
 ## CLI Usage
 
 ```bash
 # List available migration flows
 kvx list-flows
+
+# Run with throughput benchmark (prints docs/sec + MB/sec after N seconds)
+kvx run --config kvx.toml --bench-seconds 30
 
 # Run file → elasticsearch
 kvx run --source file --source-file-name input.json \
@@ -102,10 +107,12 @@ max_request_size_bytes = 131072
 - Error messages are micro-fiction, not stack traces
 - `[throttle.source]` / `[throttle.sink]` are the canonical sizing config — never embed sizing in backend configs
 - Backend configs (`[source.X]` / `[sink.X]`) are pure connection details: URL, credentials, index name
+- `--bench-seconds N` uses `AtomicU64` counters (doc count + byte count) incremented per-drain; `bench_summary()` computes wall-clock throughput — no locks, no overhead in hot path
 
 # Aggregated Context Memory Across Sessions for Current and Future Use
 
 - v0: Placeholder main.rs with raw `std::env::args()` and TOML-only config
 - v1: Full clap CLI rewrite. `list-flows` + `run` subcommands. Flat args with `--source-*`/`--sink-*` prefixes. TOML `--config` backwards compat. InMemory hidden. Claude Code skill. 9 CLI tests.
 - v2 (6-phase refactor): Updated `AppConfig` field names (`source`/`sink` vs old `source_config`/`sink_config`). Throttle config moved to `[throttle.source]`/`[throttle.sink]` TOML sections. CLI throttle override args added. `kvx::stop()` wired to Ctrl+C for graceful shutdown via `CancellationToken`. 110 total tests (101 kvx + 9 kvx-cli).
-- v3 (current — code review hardening): `Commands::Run(Box<RunArgs>)` to fix large_enum_variant (456 byte disparity). Blanket `#![allow]` removed. 126 total tests (117 kvx + 9 kvx-cli).
+- v3 (code review hardening): `Commands::Run(Box<RunArgs>)` to fix large_enum_variant (456 byte disparity). Blanket `#![allow]` removed. 126 total tests (117 kvx + 9 kvx-cli).
+- v4 (current — allocation optimization + bench flag): `--bench-seconds N` flag added; atomic doc/byte counters; `bench_summary()` throughput report. Downstream of kvx v20: pre-computed bulk URL/auth, TCP_NODELAY, response skip, `base64` dep. `sink_config` field removed from ES/OS sinks — pure connection config. 143 total tests (134 kvx + 9 kvx-cli).

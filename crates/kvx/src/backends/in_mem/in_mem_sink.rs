@@ -12,6 +12,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 
 use crate::backends::Sink;
+use crate::buffer_pool::PoolBuffer;
 /// 📦 A sink that never forgets. Unlike my dad, who forgot my soccer game in 1998.
 ///
 /// `InMemorySink` receives fully rendered payload strings and hoards them in a shared Vec
@@ -57,9 +58,14 @@ impl Sink for InMemorySink {
     ///
     /// 🎯 I/O-only: the SinkWorker already transformed and binary-collected the payload.
     /// We just stash it for test assertions. No parsing. No judgment. Just storage.
-    async fn drain(&mut self, payload: String) -> Result<()> {
+    async fn drain(&mut self, payload: PoolBuffer) -> Result<()> {
         // 🔒 The Mutex is load-bearing. Do not remove. I know it looks optional. It isn't.
-        self.received.lock().await.push(payload);
+        // 🏦 Convert PoolBuffer → String for test assertions. Test code gets readability,
+        // production code gets zero-copy. Everybody wins except the allocator. 🎭
+        let payload_string = payload.as_str()
+            .map_err(|e| anyhow::anyhow!("💀 Test payload contains invalid UTF-8: {e}"))?
+            .to_string();
+        self.received.lock().await.push(payload_string);
         Ok(())
     }
 
