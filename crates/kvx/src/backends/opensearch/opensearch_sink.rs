@@ -204,12 +204,17 @@ impl OpenSearchSink {
         // Without this, OpenSearch rejects docs that lack `_index` in the action metadata.
         // When no index is configured (per-doc routing), fall back to the bare `/_bulk` endpoint.
         let the_base_url_trimmed_like_a_fresh_haircut = self.sink_config.url.trim_end_matches('/');
+        // 🚀 filter_path=items.*.error: OpenSearch returns `{}` on success, only error details on
+        // failure. Same optimization as the ES sink — keep the hot path lean.
         let bulk_url = match self.sink_config.index {
             Some(ref index_name) => format!(
-                "{}/{}/_bulk",
+                "{}/{}/_bulk?filter_path=items.*.error",
                 the_base_url_trimmed_like_a_fresh_haircut, index_name
             ),
-            None => format!("{}/_bulk", the_base_url_trimmed_like_a_fresh_haircut),
+            None => format!(
+                "{}/_bulk?filter_path=items.*.error",
+                the_base_url_trimmed_like_a_fresh_haircut
+            ),
         };
         let mut request = self
             .client
@@ -231,10 +236,9 @@ impl OpenSearchSink {
         // 📡 ALWAYS read the response body — bulk API returns 200 even when items fail.
         // 🧠 TRIBAL KNOWLEDGE: Same pattern as ElasticsearchSink. The bulk API is
         // wire-format identical between ES and OpenSearch. Both return 200 with
-        // per-item errors hidden in the response body. We must check.
-        let body = response.text().await.unwrap_or_default();
-
+        // per-item errors hidden in the response body.
         if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
             anyhow::bail!(
                 "💀 OpenSearch bulk request failed with HTTP {}. Response: '{}'",
                 status,
@@ -242,43 +246,14 @@ impl OpenSearchSink {
             );
         }
 
-        // 📡 Parse the bulk response body to detect item-level errors.
-        // OpenSearch uses the same response format as ES: {"took", "errors", "items"}
-        if let Ok(bulk_response) = serde_json::from_str::<serde_json::Value>(&body)
-            && bulk_response
-                .get("errors")
-                .and_then(|e| e.as_bool())
-                .unwrap_or(false)
-        {
-            let the_item_level_carnage = bulk_response
-                .get("items")
-                .and_then(|items| items.as_array())
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter(|item| {
-                            item.as_object()
-                                .and_then(|obj| obj.values().next())
-                                .and_then(|action| action.get("status"))
-                                .and_then(|s| s.as_u64())
-                                .map(|s| s >= 400)
-                                .unwrap_or(false)
-                        })
-                        .count()
-                })
-                .unwrap_or(0);
-
-            let the_total_items = bulk_response
-                .get("items")
-                .and_then(|items| items.as_array())
-                .map(|items| items.len())
-                .unwrap_or(0);
-
+        // 📡 With filter_path=items.*.error, response is `{}` on success (2 bytes!),
+        // only error details on failure. No full per-item bloat on the hot path.
+        let body = response.text().await.unwrap_or_default();
+        if body.contains("\"error\"") {
             anyhow::bail!(
-                "💀 OpenSearch bulk response: HTTP 200 but {}/{} items failed. \
-                 Partial success is the silent killer of data migrations. We now detect it.",
-                the_item_level_carnage,
-                the_total_items
+                "💀 OpenSearch bulk response: HTTP 200 but items failed. \
+                 Partial success is the silent killer of data migrations. Response: '{}'",
+                body
             );
         }
 

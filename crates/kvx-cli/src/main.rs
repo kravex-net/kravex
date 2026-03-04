@@ -12,6 +12,11 @@
 //! ⚠️ The singularity will arrive before we add `--dry-run`. At that point,
 //! the AGI will just run the migration and tell us about it afterwards.
 
+// -- 🦆 dhat: the heap profiler that sees all allocations, like Santa but for bytes
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 // -- 🗑️ The blanket allow has been lifted. The compiler's third eye is open. 👁️
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -222,6 +227,21 @@ struct RunArgs {
 /// Error handling prints contextual messages that are helpful at 3am.
 #[tokio::main]
 async fn main() -> Result<()> {
+    // -- 🔬 dhat profiler: activate heap tracking before anything else allocates
+    // -- produces dhat-heap.json on drop — like a confession booth for your allocator 🦆
+    #[cfg(feature = "dhat-heap")]
+    let _the_heap_whisperer = dhat::Profiler::new_heap();
+
+    // -- 🛑 When profiling, catch ctrl+c so dhat's drop guard actually runs.
+    // -- Without this, SIGINT hard-kills the process and dhat-heap.json never gets written.
+    // -- kvx::stop() cancels the CancellationToken → workers drain → main returns → profiler drops. 🦆
+    #[cfg(feature = "dhat-heap")]
+    tokio::spawn(async {
+        tokio::signal::ctrl_c().await.ok();
+        eprintln!("⚡ ctrl+c caught — draining pipeline so dhat can write heap profile...");
+        kvx::stop().await.ok();
+    });
+
     // 📡 Set up tracing — because println! debugging is a lifestyle choice
     // we're trying to move past, like cargo shorts and Comic Sans
     tracing_subscriber::fmt()
@@ -375,7 +395,10 @@ async fn run_migration(args: RunArgs) -> Result<()> {
             );
         }
 
-        std::process::exit(1);
+        // 🧠 Return the error instead of process::exit(1) — exit() skips all destructors,
+        // which means dhat's profiler drop guard never writes dhat-heap.json.
+        // Returning lets the stack unwind so the profiler flushes before we die. 🦆
+        return Err(err);
     }
 
     Ok(())

@@ -200,6 +200,30 @@ pub(crate) trait Transform: std::fmt::Debug {
     /// format conversion is needed. The Composer iterates these to build the final payload.
     /// "He who borrows from the page, allocates not in vain." — Ancient Cow proverb 🐄
     fn transform<'a>(&self, raw_source_page: &'a str) -> Result<Vec<Cow<'a, str>>>;
+
+    /// 🚀 Stream-transform a page directly into an NDJSON output buffer.
+    ///
+    /// Default impl: calls `transform()` and appends each item + `\n` to output.
+    /// Override this for transforms that can skip the intermediate `Vec<Cow>` entirely —
+    /// writing per-doc results straight into the output buffer. Passthrough gets this
+    /// for free (the default is already optimal for a single borrowed item). 🐄
+    ///
+    /// 🧠 Tribal knowledge: this exists because `NdjsonComposer::compose()` was building
+    /// a `Vec<Cow<str>>` per page only to immediately iterate it and push_str into a
+    /// String. The Vec allocation + Cow::Owned wrappers were pure overhead for NDJSON.
+    /// Now transforms that know their output is NDJSON can skip the middleman.
+    ///
+    /// "He who streams directly, allocates not in the middle." — Ancient pipeline proverb 🚰
+    fn transform_into_ndjson(&self, raw_source_page: &str, output: &mut String) -> Result<()> {
+        // -- 🔄 Default: delegate to transform(), iterate items, push into output.
+        // -- Works for all transforms. Overrideable for those that can do better.
+        let items = self.transform(raw_source_page)?;
+        for item in &items {
+            output.push_str(item.as_ref());
+            output.push('\n');
+        }
+        Ok(())
+    }
 }
 
 // ============================================================
@@ -324,6 +348,16 @@ impl Transform for DocumentTransformer {
             Self::RallyS3ToEs(t) => t.transform(raw_source_page),
             Self::EsHitToBulk(t) => t.transform(raw_source_page),
             Self::Passthrough(t) => t.transform(raw_source_page),
+        }
+    }
+
+    #[inline]
+    fn transform_into_ndjson(&self, raw_source_page: &str, output: &mut String) -> Result<()> {
+        // -- 🚀 Dispatch streaming NDJSON — same match, but the fast path skips Vec<Cow>.
+        match self {
+            Self::RallyS3ToEs(t) => t.transform_into_ndjson(raw_source_page, output),
+            Self::EsHitToBulk(t) => t.transform_into_ndjson(raw_source_page, output),
+            Self::Passthrough(t) => t.transform_into_ndjson(raw_source_page, output),
         }
     }
 }

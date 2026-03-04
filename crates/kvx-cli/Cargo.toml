@@ -3,7 +3,11 @@ name = "kvx-cli"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+dhat-heap = ["dhat"]
+
 [dependencies]
+dhat = { version = "0.3", optional = true }
 kvx = { path = "../kvx" }
 tokio = { workspace = true }
 anyhow = { workspace = true }
