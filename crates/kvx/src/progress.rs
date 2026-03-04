@@ -98,6 +98,8 @@ pub(crate) struct ProgressMetrics {
     rate_samples: VecDeque<(Instant, u64, u64)>,
     /// ⏱️ when did this whole adventure start? hopefully not too long ago.
     start_time: Instant,
+    /// 🎬 last time we rendered — throttle to ~4 FPS because terminals aren't GPUs
+    last_render: Instant,
 }
 
 impl std::fmt::Debug for ProgressMetrics {
@@ -145,6 +147,7 @@ impl ProgressMetrics {
             progress_bar,
             rate_samples,
             start_time,
+            last_render: start_time,
         }
     }
 
@@ -157,10 +160,17 @@ impl ProgressMetrics {
         self.total_bytes += bytes_read;
         self.total_docs += docs_read;
 
-        // -- 📊 crunch the numbers, render the glory
-        let rates = self.calculate_rates();
-        self.render(rates);
-        self.progress_bar.set_position(self.total_bytes);
+        // 🎬 Throttle renders to ~4 FPS (250ms). Terminals aren't GPUs and comfy_table
+        // rebuilds + indicatif redraws on every batch murder throughput.
+        // 🧠 TRIBAL KNOWLEDGE: Rendering every batch caused a regression from 16k to 459 docs/s
+        // on PMC (574K docs). The pipeline was spending more time drawing tables than indexing.
+        let now = Instant::now();
+        if now.duration_since(self.last_render).as_millis() >= 250 {
+            let rates = self.calculate_rates();
+            self.render(rates);
+            self.progress_bar.set_position(self.total_bytes);
+            self.last_render = now;
+        }
     }
 
     /// ✅ Mark the progress bar done. Ring the bell. We made it.
@@ -281,9 +291,11 @@ impl ProgressMetrics {
         table.load_preset(NOTHING);
         table.set_content_arrangement(ContentArrangement::Dynamic);
 
-        // 🚀 row 1: throughput rates
+        // 🚀 row 1: throughput rates — docs/s for the speedometer, docs/min for the odometer
+        let docs_per_min = format_number((rates.docs_per_sec * 60.0) as u64);
         table.add_row(vec![
-            Cell::new(format!("{} Docs/s", docs_rate)).set_alignment(CellAlignment::Right),
+            Cell::new(format!("{} Docs/s  {} Docs/min", docs_rate, docs_per_min))
+                .set_alignment(CellAlignment::Right),
             Cell::new(format!("{} Docs", docs_total)).set_alignment(CellAlignment::Right),
         ]);
         // 📦 row 2: byte throughput and cumulative progress

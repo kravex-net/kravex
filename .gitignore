@@ -29,3 +29,6 @@ __pycache__/
 
 # Claude Code worktree metadata
 .claude/worktrees/
+# DHAT profiling artifacts
+dhat-heap.json
+DHAT Viewer*

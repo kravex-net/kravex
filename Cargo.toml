@@ -26,10 +26,10 @@ reqwest = "0.13"
 serde = { version = "1.0", features = ["derive"] }
 
 # 🦆 serde's plus one at the party
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["raw_value"] }
 
 # 🧵👑 the async overlord. kneel before thy runtime, peasant threads.
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util"]}
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util", "signal"]}
 
 # 🛑 tokio-util — CancellationToken, because graceful shutdown
 # is what separates us from `kill -9`. Barely. 🦆

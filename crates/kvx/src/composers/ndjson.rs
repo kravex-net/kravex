@@ -38,19 +38,23 @@ pub(crate) struct NdjsonComposer;
 impl Composer for NdjsonComposer {
     #[inline]
     fn compose(&self, pages: &[String], transformer: &DocumentTransformer) -> Result<String> {
-        // -- 🧮 Pre-allocate based on total page bytes — a vibes-based estimate that's usually close
-        // -- Knowledge graph: +64 per page accounts for transform overhead (action lines in ES bulk)
-        let estimated_size: usize = pages.iter().map(|p| p.len() + 64).sum();
+        // -- 🧮 Pre-allocate based on total page bytes + per-doc overhead estimate.
+        // -- 🧠 +64 per doc (not per page!) accounts for ES bulk action lines.
+        // -- Count newlines to estimate doc count. Off-by-one is fine — over-estimate > realloc.
+        let estimated_size: usize = pages
+            .iter()
+            .map(|p| {
+                let the_doc_count_guess = p.bytes().filter(|&b| b == b'\n').count() + 1;
+                p.len() + (the_doc_count_guess * 64)
+            })
+            .sum();
         let mut payload = String::with_capacity(estimated_size);
 
         for page in pages {
-            // -- 🔄 Transform this page → Vec<Cow<str>> items
-            // -- Passthrough: Cow::Borrowed (zero alloc). ES bulk: Cow::Owned (action+source pairs).
-            let items = transformer.transform(page)?;
-            for item in &items {
-                payload.push_str(item.as_ref());
-                payload.push('\n');
-            }
+            // -- 🚀 Stream transform directly into the payload buffer.
+            // -- Passthrough: default impl (push_str + \n). ES bulk: streaming override (no Vec<Cow>).
+            // -- Old code: transform() → Vec<Cow<str>> → iterate → push_str. Two middlemen eliminated.
+            transformer.transform_into_ndjson(page, &mut payload)?;
         }
 
         // -- ✅ Trailing \n included — ES bulk requires it, files appreciate it, nobody complains.

@@ -6,8 +6,8 @@
 # 🦆 (publish or perish — the duck published)
 
 [runtime]
-queue_capacity = 16
-sink_parallelism = 4
+queue_capacity = 32
+sink_parallelism = 128
 
 [source.File]
 file_name = "benchmark/data/pmc.json"
@@ -18,7 +18,7 @@ index = "benchmark_pmc"
 
 [throttle.source]
 max_batch_size_docs = 5000
-max_batch_size_bytes = 52428800
+max_batch_size_bytes = 1048576
 
 [throttle.sink]
-max_request_size_bytes = 52428800
+max_request_size_bytes = 1048576

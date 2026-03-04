@@ -211,12 +211,17 @@ impl ElasticsearchSink {
         // 🧠 TRIBAL KNOWLEDGE: Without index in URL, ES 8.x returns 400 for every doc and
         // kravex hangs at 0% progress. This was Bug 6 from the benchmark session.
         let the_base_url_trimmed_like_a_fresh_haircut = self.sink_config.url.trim_end_matches('/');
+        // 🚀 filter_path=items.*.error tells ES to return ONLY error details for failed items.
+        // On success: empty `{}`. On failure: just the error objects, not full per-item bloat.
         let bulk_url = match self.sink_config.index {
             Some(ref index_name) => format!(
-                "{}/{}/_bulk",
+                "{}/{}/_bulk?filter_path=items.*.error",
                 the_base_url_trimmed_like_a_fresh_haircut, index_name
             ),
-            None => format!("{}/_bulk", the_base_url_trimmed_like_a_fresh_haircut),
+            None => format!(
+                "{}/_bulk?filter_path=items.*.error",
+                the_base_url_trimmed_like_a_fresh_haircut
+            ),
         };
         let mut request = self
             .client
@@ -239,16 +244,9 @@ impl ElasticsearchSink {
             .context("💀 The bulk request never made it to Elasticsearch. Check connectivity, check timeouts, check your horoscope.")?;
 
         let status = response.status();
-        // 📡 ALWAYS read the response body — ES bulk returns 200 even when items fail.
-        // Without this check, 429s, mapping errors, and version conflicts are silently swallowed.
-        // 🧠 TRIBAL KNOWLEDGE: This was the likely root cause of the 19.3M-from-11.4M anomaly.
-        // ES returns 200 with `"errors": true` when individual items fail. The old code only
-        // checked the HTTP status, so partial failures were invisible. Combined with
-        // auto-generated _ids (geonames has no ObjectID), any re-indexing creates NEW docs
-        // instead of upserts, inflating the count.
-        let body = response.text().await.unwrap_or_default();
 
         if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
             anyhow::bail!(
                 "💀 Elasticsearch bulk request failed with HTTP {}. Response: '{}'",
                 status,
@@ -256,49 +254,21 @@ impl ElasticsearchSink {
             );
         }
 
-        // 📡 Parse the bulk response body to detect item-level errors.
-        // ES returns {"took": N, "errors": bool, "items": [...]}
-        // When errors=true, at least one item failed (429, 409, mapping error, etc.)
-        // We fail fast on ANY item error — partial indexing is worse than a clean failure
-        // because it's invisible and creates inconsistent state.
-        if let Ok(bulk_response) = serde_json::from_str::<serde_json::Value>(&body)
-            && bulk_response
-                .get("errors")
-                .and_then(|e| e.as_bool())
-                .unwrap_or(false)
-        {
-            // 💀 Count how many items failed for a useful error message
-            let the_item_level_carnage = bulk_response
-                .get("items")
-                .and_then(|items| items.as_array())
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter(|item| {
-                            item.as_object()
-                                .and_then(|obj| obj.values().next())
-                                .and_then(|action| action.get("status"))
-                                .and_then(|s| s.as_u64())
-                                .map(|s| s >= 400)
-                                .unwrap_or(false)
-                        })
-                        .count()
-                })
-                .unwrap_or(0);
-
-            let the_total_items = bulk_response
-                .get("items")
-                .and_then(|items| items.as_array())
-                .map(|items| items.len())
-                .unwrap_or(0);
-
+        // 📡 With filter_path=items.*.error, ES returns `{}` when all items succeed (2 bytes!)
+        // and only error details when items fail. No per-item _id/_version/_shards bloat.
+        // 🧠 TRIBAL KNOWLEDGE: Full response body parsing caused a 30x performance regression
+        // (308 docs/s → 10k+). The fix: let the server filter, not the client.
+        // 🧠 TRIBAL KNOWLEDGE: This check catches the root cause of the 19.3M-from-11.4M anomaly —
+        // item-level 429s/mapping errors were silently swallowed. Combined with auto-generated
+        // _ids (geonames has no ObjectID), re-indexing created NEW docs instead of upserts.
+        let body = response.text().await.unwrap_or_default();
+        if body.contains("\"error\"") {
             anyhow::bail!(
-                "💀 Elasticsearch bulk response: HTTP 200 but {}/{} items failed. \
+                "💀 Elasticsearch bulk response: HTTP 200 but items failed. \
                  The cluster accepted the request but rejected individual documents. \
                  This is the silent killer of data migrations — partial success looks \
-                 like full success unless you check the response body. Which we now do.",
-                the_item_level_carnage,
-                the_total_items
+                 like full success unless you check. Response: '{}'",
+                body
             );
         }
 

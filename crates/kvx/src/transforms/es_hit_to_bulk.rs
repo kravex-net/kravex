@@ -1,41 +1,56 @@
 // ai
-//! 🔄📡 ES/OpenSearch Hit → Bulk Format Transform — the great doc converter 🏗️🚀
+//! 🔄📡 ES/OpenSearch Hit → Bulk Format Transform — zero-copy edition 🏗️🚀
 //!
-//! 🎬 COLD OPEN — INT. DATA PIPELINE — THE DOCUMENTS ARRIVE IN SEARCH FORMAT
+//! 🎬 COLD OPEN — INT. DATA PIPELINE — THE DOCUMENTS REFUSE TO BE PARSED
 //!
 //! The source hands us documents in search hit format: `_id`, `_index`, `_source`.
 //! The sink needs them in bulk API format: action line + source line.
-//! Two formats. One transform. Zero mercy.
+//! The old code parsed every document into a `Value` tree, then re-serialized it.
+//! That's like translating English to French by first converting to interpretive dance.
 //!
-//! This transform bridges the gap between "reading from a search engine" and
-//! "writing to a search engine." It takes the hit format that OpenSearch/ES
-//! sources emit and converts each document into the sacred two-line bulk format:
-//! ```text
-//! {"index":{"_id":"abc123"}}
-//! {"field":"value","other_field":"other_value"}
-//! ```
-//!
-//! Works for: ES→OpenSearch, OpenSearch→ES, OpenSearch→OpenSearch, ES→ES.
-//! The bulk wire format is identical across both engines. The fork preserved it.
-//! Like a family recipe that survives a divorce.
+//! This version uses `serde_json::RawValue` to borrow `_source` directly from the
+//! input bytes. Zero parsing of the document body. Zero re-serialization. The `_id`
+//! is also borrowed raw — already JSON-escaped from the source, ready to embed.
 //!
 //! ## Knowledge Graph 🧠
 //! - Pattern: same as `RallyS3ToEs` — zero-sized struct, `impl Transform`
-//! - Input format: NDJSON lines from search source, each line:
-//!   `{"_id":"abc","_index":"src-idx","_source":{"field":"val"}}`
-//! - Output format: ES/OpenSearch bulk NDJSON pairs:
-//!   `{"index":{"_id":"abc"}}\n{"field":"val"}`
-//! - Strips `_type` from hits if present (ES 7.x artifact, dead in OpenSearch)
-//! - Preserves `_id` for document identity routing in the target cluster
-//! - Returns `Vec<Cow::Owned>` because format conversion = allocation
+//! - Key optimization: `RawValue` borrows `_source` and `_id` from input — no `Value` tree
+//! - `_source` (often kilobytes) is memcpy'd, never parsed. The biggest win.
+//! - `_id` raw JSON token is embedded directly in action line — no escape function needed
+//! - Single pre-sized `String` allocation per hit (was: multiple format!/to_string calls)
+//! - `escape_json_string` eliminated — raw JSON tokens are already escaped by definition
+//! - `build_bulk_action_line` inlined — one fewer function call in the hot path
 //!
-//! ⚠️ "He who transforms hits to bulk, bridges two search engines with one function."
-//! 🦆 The transform duck doesn't care which search engine you use. It just converts.
+//! ⚠️ "He who borrows from the input, allocates not in vain." — Ancient serde proverb
+//! 🦆 The optimization duck quacks in O(memcpy) instead of O(parse+serialize).
 
 use super::Transform;
 use anyhow::{Context, Result};
-use serde_json::Value;
+use serde::Deserialize;
+use serde_json::value::RawValue;
 use std::borrow::Cow;
+use std::fmt::Write;
+
+/// 🔍 Zero-copy search hit — borrows `_id` and `_source` directly from the input JSON.
+///
+/// Uses `RawValue` to skip parsing the document body entirely.
+/// The `_source` field (often kilobytes of nested JSON) is never deserialized —
+/// we just grab a reference to the raw bytes and pass them through.
+///
+/// `_id` is also raw — the JSON token (e.g. `"abc"` with quotes) is already escaped.
+/// We embed it directly into the action line. No escaping function. No allocation.
+///
+/// Before this struct existed, we parsed the whole hit into `Value`. Every field.
+/// Every nested object. Every array element. Like reading an entire novel to find the ISBN.
+#[derive(Deserialize)]
+struct SearchHit<'a> {
+    /// 📋 Document identity — raw JSON token, already escaped. String, number, or absent.
+    #[serde(borrow)]
+    _id: Option<&'a RawValue>,
+    /// 📦 Document body — raw JSON, never parsed, never re-serialized.
+    #[serde(borrow)]
+    _source: Option<&'a RawValue>,
+}
 
 /// 🔄 EsHitToBulk — converts search hit format to bulk API format.
 ///
@@ -44,15 +59,21 @@ use std::borrow::Cow;
 ///
 /// ## What it does (per document) 🔧
 ///
-/// 1. Parse hit JSON: `{"_id":"abc","_index":"src-idx","_source":{...}}`
-/// 2. Extract `_id` → bulk action `_id` field
-/// 3. Extract `_source` → bulk source line (the actual document body)
-/// 4. Build action line: `{"index":{"_id":"abc"}}`
-/// 5. Serialize source as the body line
-/// 6. Return `"{action}\n{source}"` — the sacred two-line bulk format
+/// 1. Typed deserialize: borrow `_id` and `_source` as `RawValue` references
+/// 2. `_id` → embed raw JSON token in action line (already escaped)
+/// 3. `_source` → memcpy raw JSON text as the body line (never parsed)
+/// 4. Output: `"{action}\n{source}"` — the sacred two-line bulk format
 ///
-/// Knock knock. Who's there? A search hit. A search hit who? A search hit that
-/// needs to become a bulk action pair before the sink will accept it. Classic.
+/// ## Performance vs old approach 📊
+///
+/// | Step | Before | After |
+/// |------|--------|-------|
+/// | Parse hit | Full `Value` tree (recursive) | Typed struct, borrows 2 fields |
+/// | `_source` | Parse → `Value` → `to_string()` | Raw memcpy from input |
+/// | `_id` | Parse → match type → `escape_json_string()` → `format!()` | Embed raw token |
+/// | Output | Multiple `format!()` + `to_string()` | Single pre-sized `String` |
+///
+/// The singularity won't happen before we finish parsing documents at this rate. But it'll be close.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EsHitToBulk;
 
@@ -60,127 +81,117 @@ impl Transform for EsHitToBulk {
     /// 🔄 Search hit page in, bulk action pairs out. Splits by `\n`, transforms each hit.
     ///
     /// Returns `Vec<Cow::Owned(...)>` — each item is a bulk pair (action\nsource).
-    /// Owned because we parse the hit format and rebuild in bulk format.
+    /// Owned because we construct new strings (even though _source isn't parsed,
+    /// we still need a new String for the action_line+newline+source combo).
     ///
     /// # Errors
-    /// 💀 Returns error if any line in the page is not valid JSON or missing `_source`.
+    /// 💀 Returns error if any line is not valid JSON or missing `_source`.
     #[inline]
     fn transform<'a>(&self, raw_source_page: &'a str) -> Result<Vec<Cow<'a, str>>> {
-        // -- 📄 Split page by newlines, transform each non-empty line.
-        // -- Each hit gets its search metadata stripped and re-dressed in bulk API attire.
-        // -- It's like a makeover show, but for JSON. "Queer Eye for the Search Hit." 👔
         raw_source_page
             .split('\n')
             .filter(|line| !line.trim().is_empty())
             .map(|line| transform_single_hit(line).map(Cow::Owned))
             .collect()
     }
+
+    /// 🚀 Stream search-hit→bulk transform directly into the NDJSON output buffer.
+    /// Skips Vec<Cow> — same streaming pattern as RallyS3ToEs. 🦆
+    #[inline]
+    fn transform_into_ndjson(&self, raw_source_page: &str, output: &mut String) -> Result<()> {
+        for line in raw_source_page.split('\n') {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let the_bulk_pair = transform_single_hit(line)?;
+            output.push_str(&the_bulk_pair);
+            output.push('\n');
+        }
+        Ok(())
+    }
 }
 
 /// 🔧 Transform a single search hit JSON into bulk API format (action\nsource).
 ///
+/// Uses zero-copy deserialization — `_source` is never parsed into a `Value` tree.
+/// The raw JSON text is borrowed from the input and written directly to the output.
+/// `_id` is also borrowed as its raw JSON token and embedded in the action line.
+///
 /// Input:  `{"_id":"abc","_index":"src-idx","_source":{"field":"val"}}`
 /// Output: `{"index":{"_id":"abc"}}\n{"field":"val"}`
 ///
-/// If `_id` is missing, produces an action line without `_id` (auto-generate).
-/// If `_source` is missing, that's a hard error — we can't index nothing.
+/// ## Per-document allocation budget 💰
+/// - 1 `SearchHit` struct (2 pointers + discriminants — stack, ~32 bytes)
+/// - 1 `String` output (pre-sized to input length + ~50 bytes overhead)
+/// - 0 `Value` nodes (was: entire recursive document tree)
+/// - 0 `escape_json_string` calls (was: per-document string scan + potential alloc)
 ///
-/// "He who transforms without _source, indexes the void." — Ancient bulk proverb
-fn transform_single_hit(raw: &str) -> Result<String> {
-    // 🔬 Phase 1: Parse the hit JSON
-    let hit: Value = serde_json::from_str(raw).context(
-        "💀 Search hit parse failed — the source emitted something that's not valid JSON. \
-         Either the source is corrupted, or the pipeline has a leak. Check upstream.",
-    )?;
-
-    // 🎯 Phase 2: Extract _id → bulk action _id
-    let the_document_identity = hit.get("_id").and_then(|id| match id {
-        Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
-        Value::Null => None,
-        honestly_who_knows => Some(honestly_who_knows.to_string()),
-    });
-
-    // 📦 Phase 3: Extract _source — the actual document body
-    let the_source = hit.get("_source").ok_or_else(|| {
-        anyhow::anyhow!(
-            "💀 Search hit missing '_source' field. We got a hit without a body. \
-             Like a letter without a message. Like a taco without filling. \
-             The hit was: {}",
-            raw
-        )
-    })?;
-
-    // 📡 Phase 4: Build action line
-    let the_action_line = build_bulk_action_line(the_document_identity.as_deref());
-
-    // 📦 Phase 5: Serialize the source body
-    let the_source_line = serde_json::to_string(the_source).context(
-        "💀 Failed to re-serialize _source. The document went in valid and came out... not. \
-         File a bug against reality.",
-    )?;
-
-    // 🎯 Phase 6: Two sacred lines, newline separated
-    Ok(format!("{}\n{}", the_action_line, the_source_line))
-}
-
-/// 🏗️ Build a bulk `{"index":{...}}` action line.
-///
-/// Includes `_id` if provided, omits it otherwise (target engine auto-generates).
-/// No `_index` or `routing` — those come from the sink config/URL.
-///
-/// Builds the JSON string directly to avoid a serde round-trip for this trivial structure.
-/// Same micro-optimization as `rally_s3_to_es::build_es_action_line`.
+/// "He who copies bytes instead of parsing trees, deploys before Friday." — Ancient bulk proverb
 #[inline]
-fn build_bulk_action_line(the_document_id: Option<&str>) -> String {
-    // -- 🏗️ Same action-line recipe as rally_s3_to_es — duplicated because DRY is for towels
-    match the_document_id {
-        Some(id) => {
-            format!(r#"{{"index":{{"_id":"{}"}}}}"#, escape_json_string(id))
+fn transform_single_hit(raw: &str) -> Result<String> {
+    // 🔬 Phase 1: Typed deserialize — borrows _id and _source as raw JSON slices.
+    // -- serde walks the input once, grabs two pointers. The rest of the hit? Ignored.
+    // -- Like reading a book's title and ISBN without reading the actual book. Efficient.
+    let hit: SearchHit = serde_json::from_str(raw).context(
+        "💀 Search hit parse failed — the source emitted non-JSON. \
+         Either corrupted upstream or the pipeline sprang a leak. \
+         Check upstream. Call a plumber. File an insurance claim.",
+    )?;
+
+    // 📦 Phase 2: Grab _source — the raw JSON text, never parsed.
+    // -- This is the big win. A 10KB document body? Just a &str slice. No tree. No nodes.
+    let the_source_json = hit
+        ._source
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "💀 Search hit missing '_source'. A hit without a body. \
+                 Like a burrito without filling. Like a commit without a diff. \
+                 Like a Monday without coffee. The hit was: {}",
+                raw
+            )
+        })?
+        .get();
+
+    // 🏗️ Phase 3: Build output — one allocation, pre-sized.
+    // -- Action line ~50 bytes + \n + source body. Slight over-allocation beats realloc.
+    let mut the_sacred_output = String::with_capacity(50 + the_source_json.len());
+
+    // 📡 Phase 4: Action line — embed raw _id directly (already JSON-escaped from source).
+    // -- Old code: parse _id → match type → escape_json_string() → format!()
+    // -- New code: grab raw token → embed. That's it. That's the optimization.
+    match hit._id {
+        Some(raw_id) => {
+            let id_json = raw_id.get();
+            if id_json == "null" {
+                // -- 🎲 Null _id? Let the engine auto-generate. Chaos, but the good kind.
+                the_sacred_output.push_str(r#"{"index":{}}"#);
+            } else if id_json.starts_with('"') {
+                // -- 📋 String _id — already quoted + escaped in the raw JSON. Embed as-is.
+                // -- This is the hot path. Most document IDs are strings. Zero escaping needed.
+                write!(the_sacred_output, r#"{{"index":{{"_id":{id_json}}}}}"#).unwrap();
+            } else {
+                // -- 🔢 Numeric or exotic _id — wrap in quotes for the bulk action line.
+                write!(the_sacred_output, r#"{{"index":{{"_id":"{id_json}"}}}}"#).unwrap();
+            }
         }
         None => {
-            // -- 🎲 Let the search engine pick an ID. Chaos, but the good kind.
-            r#"{"index":{}}"#.to_string()
+            // -- 🎲 No _id field at all. Auto-generate. Living dangerously.
+            the_sacred_output.push_str(r#"{"index":{}}"#);
         }
     }
-}
 
-/// 🔧 Escape a string for safe JSON embedding.
-///
-/// Handles backslash, double quotes, control characters.
-/// Fast path: if no special chars, return as-is (no allocation beyond to_string).
-///
-/// 🧠 This is duplicated from `rally_s3_to_es.rs`. Both transforms need it.
-/// Extracting to a shared utility is a future refactor if a third transform appears.
-/// "He who extracts prematurely, abstracts unnecessarily." — Ancient DRY proverb
-#[inline]
-fn escape_json_string(s: &str) -> String {
-    // 🔍 Fast path: most document IDs are alphanumeric
-    if s.bytes().all(|b| b != b'"' && b != b'\\' && b >= 0x20) {
-        return s.to_string();
-    }
+    // 🎯 Phase 5: The sacred newline separator + source body (raw copy, zero parsing).
+    // -- push_str on a pre-sized String = memcpy. The fastest kind of "serialization."
+    the_sacred_output.push('\n');
+    the_sacred_output.push_str(the_source_json);
 
-    // 🐢 Slow path: escape special characters
-    let mut escaped = String::with_capacity(s.len() + 8);
-    for ch in s.chars() {
-        match ch {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                escaped.push_str(&format!("\\u{:04x}", c as u32));
-            }
-            c => escaped.push(c),
-        }
-    }
-    escaped
+    Ok(the_sacred_output)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     /// 🧪 Single hit → single bulk action pair. The happy path.
     #[test]
@@ -345,7 +356,7 @@ mod tests {
         assert!(EsHitToBulk.transform("not json at all").is_err());
     }
 
-    /// 🧪 Special characters in _id get escaped.
+    /// 🧪 Special characters in _id get preserved through the raw JSON round-trip.
     #[test]
     fn the_one_where_special_chars_in_id_get_escaped_properly() -> Result<()> {
         let page = serde_json::json!({

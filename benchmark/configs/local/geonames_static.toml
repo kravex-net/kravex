@@ -6,7 +6,7 @@
 
 [runtime]
 queue_capacity = 16
-sink_parallelism = 4
+sink_parallelism = 32
 
 [source.File]
 file_name = "benchmark/data/geonames.json"
@@ -16,8 +16,8 @@ url = "http://localhost:9200"
 index = "benchmark_geonames"
 
 [throttle.source]
-max_batch_size_docs = 5000
-max_batch_size_bytes = 52428800
+max_batch_size_docs = 10000
+max_batch_size_bytes = 10048576
 
 [throttle.sink]
-max_request_size_bytes = 52428800
+max_request_size_bytes = 10048576
