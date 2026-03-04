@@ -97,4 +97,67 @@ mod tests {
         assert!(result.is_empty(), "Empty input → empty output. Zen.");
         Ok(())
     }
+
+    /// 🧪 PID Duplicate Investigation: NdjsonComposer + RallyS3ToEs must produce
+    /// exactly N ES bulk operations from N input lines across multiple pages.
+    ///
+    /// 🧠 TRIBAL KNOWLEDGE: replicates the exact compose path used in the benchmark:
+    /// FileSource pages → SinkWorker buffer → NdjsonComposer.compose() with RallyS3ToEs.
+    /// If the composer creates duplicates when assembling multi-page buffers, we catch it.
+    ///
+    /// "The composer combines pages like a DJ mixes tracks — seamlessly, without
+    ///  accidentally playing the same song twice." — unless it's Wonderwall 🦆
+    #[test]
+    fn ndjson_the_one_where_multi_page_rally_compose_never_duplicates() -> Result<()> {
+        use crate::transforms::rally_s3_to_es::RallyS3ToEs;
+
+        let composer = NdjsonComposer;
+        let the_rally_transformer = DocumentTransformer::RallyS3ToEs(RallyS3ToEs);
+
+        // 📝 Simulate 3 pages from FileSource with different doc counts
+        let page_1 = (0..100)
+            .map(|i| serde_json::json!({"geonameid": i, "name": format!("A{}", i)}).to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let page_2 = (100..350)
+            .map(|i| serde_json::json!({"geonameid": i, "name": format!("B{}", i)}).to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let page_3 = (350..500)
+            .map(|i| serde_json::json!({"geonameid": i, "name": format!("C{}", i)}).to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let pages = vec![page_1, page_2, page_3];
+        let the_expected_doc_count = 500;
+
+        let payload = composer.compose(&pages, &the_rally_transformer)?;
+
+        // 📊 Count ES bulk action lines — each starts with {"index":
+        let the_action_line_count = payload
+            .lines()
+            .filter(|l| l.starts_with(r#"{"index":"#))
+            .count();
+
+        assert_eq!(
+            the_action_line_count, the_expected_doc_count,
+            "🐛 NdjsonComposer produced {} action lines from {} input docs",
+            the_action_line_count, the_expected_doc_count
+        );
+
+        // ✅ Total non-empty lines = 2 * docs (action + source per doc)
+        let the_total_lines = payload.lines().count();
+        assert_eq!(
+            the_total_lines,
+            the_expected_doc_count * 2,
+            "🐛 Expected {} total lines ({}*2), got {}",
+            the_expected_doc_count * 2,
+            the_expected_doc_count,
+            the_total_lines
+        );
+
+        Ok(())
+    }
 }

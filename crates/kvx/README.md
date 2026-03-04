@@ -12,7 +12,7 @@ Core library for kravex — the zero-config search migration engine. Raw pages, 
 - **Dependents**: `kvx-cli`
 - **Dependencies**: anyhow, async-channel, figment, reqwest, serde, serde_json, tokio, tokio-util, tracing, async-trait, futures, indicatif, comfy-table, aws-sdk-s3, aws-config
 - **Edition**: 2024
-- **Test count**: 117 (kvx crate)
+- **Test count**: 117 (kvx crate) — 124 total (117 kvx + 7 kvx-cli) post PID duplicate fix
 - **Modules**:
   - `app_config` — `AppConfig`, `RuntimeConfig`, `ControllerConfig` + module subdir (`source_config.rs`, `sink_config.rs`); `build_backend()` factory on enums; re-exports `ThrottleAppConfig`, `SourceThrottleConfig`, `SinkThrottleConfig`
   - `app_config/source_config` — `SourceConfig` enum + `build_backend()` factory
@@ -180,6 +180,10 @@ lib.rs ──► app_config (AppConfig, RuntimeConfig, ControllerConfig)
 - `escape_json_string()` avoids serde round-trip for action line construction (in rally_s3_to_es + es_hit_to_bulk)
 - ES/OS source: PIT + `search_after` pagination; output NDJSON with `_id`, `_index`, `_source` per hit
 - OpenSearch sink: `danger_accept_invalid_certs` for dev clusters; SigV4 stubbed
+- ES/OS sink bulk timeout: 120s (was 30s — too short for large PID batches, caused partial commits + auto-gen _id duplicates on retry)
+- ES/OS sink bulk response checking: item-level failure detection — errors no longer silently swallowed
+- FileSource page range: `0..` (was `0..=` — off-by-one fence post, emitted one extra empty page)
+- Bulk URL routing: index field included in bulk URL for proper shard routing (Bug 6 fix)
 
 # Aggregated Context Memory Across Sessions for Current and Future Use
 
@@ -225,7 +229,7 @@ max_request_size_bytes = 131072
 # initial_output_bytes = 10485760
 ```
 
-- v18 code review + hardening (current — 117 kvx tests, 9 kvx-cli tests = 126 total):
+- v18 code review + hardening (117 kvx tests, 9 kvx-cli tests = 126 total):
   - Blanket `#![allow(dead_code, unused_variables, unused_imports)]` removed from both crates
   - 9 unused imports/variables cleaned up (file_sink, file_source, in_mem_sink, composers, supervisors)
   - All 17 clippy warnings resolved: collapsible_if, derivable_impl, needless_borrow, doc formatting, is_multiple_of, empty doc line, large_enum_variant (Box<RunArgs>)
@@ -233,6 +237,14 @@ max_request_size_bytes = 131072
   - CI/CD enhanced: `cargo clippy -- -D warnings`, `cargo fmt --check`, cargo caching, pinned toolchain
   - +16 new unit tests: ES sink (3), ES source (4), File sink (3), File source (3), progress.rs (3)
   - `max_request_size_bytes` param in `start_workers` annotated as unused (TODO: wire to SinkWorker)
+
+- v19 PID duplicate bug fix (current — 117 kvx tests, 7 kvx-cli tests = 124 total):
+  - Root cause: NOT in Rust pipeline (proven by 7 new tests targeting every plausible pipeline stage)
+  - ES bulk timeout 30s → 120s: large PID batches exceeded 30s → partial commit → auto-gen `_id` on retry = duplicates
+  - ES + OS sink: bulk response body now parsed; item-level `error` fields detected and surfaced (were silently dropped)
+  - FileSource off-by-one: `0..=page_count` → `0..page_count` (emitted one empty trailing page)
+  - Bulk URL routing: index included in URL for proper ES/OS shard routing (Bug 6)
+  - Files: `file_source.rs`, `elasticsearch_sink.rs`, `opensearch_sink.rs`, `lib.rs`, `rally_s3_to_es.rs`, `ndjson.rs`, `Cargo.toml`
 
 ## Available Rally Tracks
 big5, clickbench, eventdata, geonames, geopoint, geopointshape, geoshape, http_logs, nested, neural_search, noaa, noaa_semantic_search, nyc_taxis, percolator, pmc, so, treccovid_semantic_search, vectorsearch

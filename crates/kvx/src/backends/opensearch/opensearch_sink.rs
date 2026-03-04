@@ -139,7 +139,7 @@ impl OpenSearchSink {
         // "He who trusts self-signed certs in production, debugs in darkness." — Ancient TLS proverb
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(120))
             .danger_accept_invalid_certs(config.danger_accept_invalid_certs)
             .build()
             .context("💀 The HTTP client refused to be born. The TLS stack had a meltdown. We tried to build a reqwest::Client and the universe said 'nope.' Probably a missing TLS cert or a cursed system OpenSSL. Or you set danger_accept_invalid_certs but the universe still doesn't trust you.")?;
@@ -197,47 +197,94 @@ impl OpenSearchSink {
     /// 🔄 This function does not retry. Retries are the caller's problem. Ancient proverb:
     /// "He who retries in the sink, retries in the wrong abstraction layer."
     async fn submit_bulk_request(&self, request_body: String) -> Result<()> {
-        // 📡 Build the bulk endpoint URL. The `_bulk` API: OpenSearch's loading dock.
-        // NDJSON only — same format as Elasticsearch. The fork preserved the sacred wire format.
-        let bulk_url = format!("{}/_bulk", self.sink_config.url.trim_end_matches('/'));
+        // 📡 Index-in-URL routing: when a static index is configured, POST to /{index}/_bulk.
+        // This ensures the action line `{"index":{}}` (no `_index` field) works correctly.
+        // Without this, OpenSearch rejects docs that lack `_index` in the action metadata.
+        // When no index is configured (per-doc routing), fall back to the bare `/_bulk` endpoint.
+        let the_base_url_trimmed_like_a_fresh_haircut =
+            self.sink_config.url.trim_end_matches('/');
+        let bulk_url = match self.sink_config.index {
+            Some(ref index_name) => format!(
+                "{}/{}/_bulk",
+                the_base_url_trimmed_like_a_fresh_haircut, index_name
+            ),
+            None => format!("{}/_bulk", the_base_url_trimmed_like_a_fresh_haircut),
+        };
         let mut request = self
             .client
             .post(&bulk_url)
             // ⚠️ Content-Type: application/x-ndjson — not application/json. CRITICAL.
             // OpenSearch inherits this requirement from Elasticsearch's bulk API.
-            // Missing this header is like showing up to a formal dinner in flip-flops.
             .header("Content-Type", "application/x-ndjson");
 
         // 🔒 Auth: API key > basic auth.
-        // 🔮 TODO (next story): add SigV4 signing path here for Amazon OpenSearch Service.
-        // When aws_sigv4_region is set, use aws-sigv4 crate to sign the request
-        // before sending. The credentials come from aws-config (already in workspace).
         request = apply_auth_raw(request, &self.sink_config);
 
         let response = request
             .body(request_body)
             .send()
             .await
-            .context("💀 The bulk request never made it to OpenSearch. We launched the payload into the network and the network responded with the digital equivalent of 'new phone who dis.' Check connectivity, check timeouts, and check if your self-signed cert rotated itself into oblivion.")?;
+            .context("💀 The bulk request never made it to OpenSearch. Check connectivity, check timeouts, check if your self-signed cert rotated itself into oblivion.")?;
 
         let status = response.status();
+        // 📡 ALWAYS read the response body — bulk API returns 200 even when items fail.
+        // 🧠 TRIBAL KNOWLEDGE: Same pattern as ElasticsearchSink. The bulk API is
+        // wire-format identical between ES and OpenSearch. Both return 200 with
+        // per-item errors hidden in the response body. We must check.
+        let body = response.text().await.unwrap_or_default();
+
         if !status.is_success() {
-            // 💀 We got a response! It just wasn't good news.
-            // The body usually contains an error explaining which document caused problems,
-            // or which shard is having a rough morning. OpenSearch error bodies are inherited
-            // literature from Elasticsearch — dark, descriptive, deeply unhelpful.
-            let body = response.text().await.unwrap_or_default();
             anyhow::bail!(
-                "💀 The bulk request arrived at OpenSearch, but the cluster looked at our documents and said '{}'. The response body read: '{}'. Possible causes: bad mapping, missing index, or the cluster is just not in the mood.",
+                "💀 OpenSearch bulk request failed with HTTP {}. Response: '{}'",
                 status,
                 body
             );
-        } else {
-            trace!(
-                "🚀 OpenSearch bulk request landed successfully — documents are home, fork-side"
-            );
         }
 
+        // 📡 Parse the bulk response body to detect item-level errors.
+        // OpenSearch uses the same response format as ES: {"took", "errors", "items"}
+        if let Ok(bulk_response) = serde_json::from_str::<serde_json::Value>(&body) {
+            if bulk_response
+                .get("errors")
+                .and_then(|e| e.as_bool())
+                .unwrap_or(false)
+            {
+                let the_item_level_carnage = bulk_response
+                    .get("items")
+                    .and_then(|items| items.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter(|item| {
+                                item.as_object()
+                                    .and_then(|obj| obj.values().next())
+                                    .and_then(|action| action.get("status"))
+                                    .and_then(|s| s.as_u64())
+                                    .map(|s| s >= 400)
+                                    .unwrap_or(false)
+                            })
+                            .count()
+                    })
+                    .unwrap_or(0);
+
+                let the_total_items = bulk_response
+                    .get("items")
+                    .and_then(|items| items.as_array())
+                    .map(|items| items.len())
+                    .unwrap_or(0);
+
+                anyhow::bail!(
+                    "💀 OpenSearch bulk response: HTTP 200 but {}/{} items failed. \
+                     Partial success is the silent killer of data migrations. We now detect it.",
+                    the_item_level_carnage,
+                    the_total_items
+                );
+            }
+        }
+
+        trace!(
+            "🚀 OpenSearch bulk request landed — all items indexed, fork-side, zero casualties"
+        );
         Ok(())
     }
 }
