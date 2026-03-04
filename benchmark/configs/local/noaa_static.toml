@@ -1,0 +1,24 @@
+# ai
+# noaa_static.toml — File → Elasticsearch, NOAA weather dataset, Static throttle
+# "Weather data into Elasticsearch. Because Doppler radar wasn't dramatic enough."
+# Static throttle: what you use when you trust the cluster more than you trust yourself.
+# Ancient proverb: He who configures PID without knowing the set point, configures static.
+# 🦆 (storm chasing, found no storm, settled for duck)
+
+[runtime]
+queue_capacity = 16
+sink_parallelism = 4
+
+[source.File]
+file_name = "benchmark/data/noaa.json"
+
+[sink.Elasticsearch]
+url = "http://localhost:9200"
+index = "benchmark_noaa"
+
+[throttle.source]
+max_batch_size_docs = 5000
+max_batch_size_bytes = 52428800
+
+[throttle.sink]
+max_request_size_bytes = 52428800

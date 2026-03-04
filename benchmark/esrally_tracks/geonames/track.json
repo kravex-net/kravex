@@ -1,0 +1,40 @@
+{
+  "version": 2,
+  "description": "# ai — Geonames bulk indexing benchmark track. 11.4M geographic location docs. Throughput-only, dynamic mapping. AI-generated for Kravex benchmark suite.",
+  "indices": [
+    {
+      "name": "geonames",
+      "body": "index.json"
+    }
+  ],
+  "corpora": [
+    {
+      "name": "geonames",
+      "documents": [
+        {
+          "source-file": "documents.json",
+          "document-count": 11396503
+        }
+      ]
+    }
+  ],
+  "schedule": [
+    {
+      "operation": {
+        "operation-type": "delete-index"
+      }
+    },
+    {
+      "operation": {
+        "operation-type": "create-index"
+      }
+    },
+    {
+      "operation": {
+        "operation-type": "bulk",
+        "bulk-size": 5000
+      },
+      "warmup-time-period": 0
+    }
+  ]
+}

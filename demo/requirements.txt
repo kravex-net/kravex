@@ -1,0 +1,5 @@
+# ai
+# 🐍 Kravex Demo Pipeline — Python Dependencies
+# The singularity will happen before we add more than two deps here
+requests>=2.31
+rich>=13.0

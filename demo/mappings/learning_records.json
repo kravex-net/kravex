@@ -1,0 +1,19 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "record_id": { "type": "keyword" },
+      "employee_id": { "type": "keyword" },
+      "course_name": { "type": "text" },
+      "category": { "type": "keyword" },
+      "score": { "type": "float" },
+      "completion_date": { "type": "date" },
+      "duration_minutes": { "type": "integer" },
+      "status": { "type": "keyword" },
+      "provider": { "type": "keyword" }
+    }
+  }
+}

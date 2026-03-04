@@ -1,0 +1,21 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "posting_id": { "type": "keyword" },
+      "title": { "type": "text" },
+      "department": { "type": "keyword" },
+      "salary_min": { "type": "integer" },
+      "salary_max": { "type": "integer" },
+      "posted_date": { "type": "date" },
+      "closing_date": { "type": "date" },
+      "status": { "type": "keyword" },
+      "location": { "type": "keyword" },
+      "description": { "type": "text" },
+      "requirements": { "type": "text" }
+    }
+  }
+}

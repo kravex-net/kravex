@@ -1,0 +1,23 @@
+# ai
+# 💼 Job Postings — 5k docs of "competitive salary (trust us)"
+# "Requirements: 10 years experience in a 3-year-old framework" 🦆
+
+[runtime]
+queue_capacity = 8
+sink_parallelism = 2
+
+[source.Elasticsearch]
+url = "http://localhost:9200"
+index = "job_postings"
+
+[sink.OpenSearch]
+url = "http://localhost:9201"
+index = "job_postings"
+danger_accept_invalid_certs = false
+
+[throttle.source]
+max_batch_size_bytes = 131072
+max_batch_size_docs = 2500
+
+[throttle.sink]
+max_request_size_bytes = 131072

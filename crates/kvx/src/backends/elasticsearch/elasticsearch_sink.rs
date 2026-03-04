@@ -201,6 +201,10 @@ impl ElasticsearchSink {
     ///
     /// 🔄 This function does not retry. Retries are the caller's problem. Good luck.
     async fn submit_bulk_request(&self, request_body: String) -> Result<()> {
+        // -- 📡 Build the bulk endpoint URL. The `_bulk` API: Elasticsearch's loading dock.
+        // -- NDJSON only — no JSON arrays, no XML, no CSV, no hand-coded tab-separated values.
+        // -- NDJSON. The only format Elasticsearch respects. Truly the format of people who
+        // -- wanted JSON but also wanted to feel slightly superior about it.
         // 📡 ES 8.x requires the index either in the action line OR the URL path.
         // RallyS3ToEs transform emits `{"index":{}}` without `_index`, so we route via URL.
         // When no index is configured (per-doc routing), fall back to the bare `/_bulk` endpoint.
@@ -349,5 +353,48 @@ mod tests {
         };
         assert!(config.username.is_none());
         assert!(config.api_key.is_none());
+    }
+
+    /// 🧪 Bulk URL includes index when configured — ES 8.x needs it in the URL path
+    /// because RallyS3ToEs emits `{"index":{}}` without `_index` in the action line.
+    /// "You shall not pass... without an index in the URL." — Gandalf, if he ran ES 8 🦆
+    #[test]
+    fn the_one_where_bulk_url_includes_index_when_configured() {
+        // -- 📡 Config with an index — the URL should be /{index}/_bulk, not just /_bulk
+        let config = ElasticsearchSinkConfig {
+            url: "https://localhost:9200".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            index: Some("geonames".to_string()),
+        };
+        let base = config.url.trim_end_matches('/');
+        let bulk_url = match config.index {
+            Some(ref idx) => format!("{}/{}/_bulk", base, idx),
+            None => format!("{}/_bulk", base),
+        };
+        assert_eq!(bulk_url, "https://localhost:9200/geonames/_bulk");
+    }
+
+    /// 🧪 Bulk URL falls back to bare /_bulk when no index is configured (per-doc routing).
+    /// Like a bulk API without a destination — it trusts each doc to know where it's going.
+    /// "Not all who wander to /_bulk are lost" — Tolkien, bulk API edition 🚀
+    #[test]
+    fn the_one_where_bulk_url_is_bare_when_no_index_configured() {
+        // -- 📡 Config without an index — per-doc routing, so bare /_bulk is correct
+        let config = ElasticsearchSinkConfig {
+            url: "https://localhost:9200/".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            index: None,
+        };
+        let base = config.url.trim_end_matches('/');
+        let bulk_url = match config.index {
+            Some(ref idx) => format!("{}/{}/_bulk", base, idx),
+            None => format!("{}/_bulk", base),
+        };
+        // ⚠️ Also tests trailing-slash trimming — the URL had a trailing `/`
+        assert_eq!(bulk_url, "https://localhost:9200/_bulk");
     }
 }

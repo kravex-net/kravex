@@ -1,0 +1,38 @@
+# ai
+# noaa_pid_aws.toml — File → AWS OpenSearch managed, NOAA weather, PID throttle
+# "The borrow checker is sentient. I have proof." — similarly, AWS billing is sentient and it is watching.
+# PID + NOAA + managed OpenSearch. The trifecta. The holy trinity. The thing that makes graphs beautiful.
+# set_point_ms=8000.0: we're not in localhost anymore, Toto.
+# 🦆 (duck in the cloud, expensed to the project, awaiting approval)
+
+[runtime]
+queue_capacity = 16
+sink_parallelism = 8
+
+[source.File]
+file_name = "benchmark/data/noaa.ndjson"
+
+[sink.OpenSearch]
+url = "https://YOUR_OPENSEARCH_ENDPOINT_HERE"
+username = "admin"
+password = "YOUR_PASSWORD_HERE"
+index = "benchmark_noaa"
+
+[throttle.source]
+max_batch_size_docs = 5000
+max_batch_size_bytes = 52428800
+
+[throttle.source.controller]
+type = "pid_bytes_to_doc_count"
+desired_response_size_bytes = 5242880.0
+initial_doc_count = 1000
+min_doc_count = 100
+max_doc_count = 10000
+
+[throttle.sink]
+max_request_size_bytes = 52428800
+mode = "Pid"
+set_point_ms = 8000.0
+min_bytes = 1048576
+max_bytes = 52428800
+initial_output_bytes = 10485760

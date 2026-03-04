@@ -1,0 +1,23 @@
+# ai
+# 📋 Performance Reviews — 25k docs of "meets expectations"
+# "Rating inflation is real. Like my mortgage." 🦆
+
+[runtime]
+queue_capacity = 8
+sink_parallelism = 4
+
+[source.Elasticsearch]
+url = "http://localhost:9200"
+index = "performance_reviews"
+
+[sink.OpenSearch]
+url = "http://localhost:9201"
+index = "performance_reviews"
+danger_accept_invalid_certs = false
+
+[throttle.source]
+max_batch_size_bytes = 131072
+max_batch_size_docs = 5000
+
+[throttle.sink]
+max_request_size_bytes = 131072

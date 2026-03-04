@@ -1,0 +1,40 @@
+{
+  "version": 2,
+  "description": "# ai — NOAA bulk indexing benchmark track. 33.7M weather station observation docs. Throughput-only, dynamic mapping. AI-generated for Kravex benchmark suite.",
+  "indices": [
+    {
+      "name": "noaa",
+      "body": "index.json"
+    }
+  ],
+  "corpora": [
+    {
+      "name": "noaa",
+      "documents": [
+        {
+          "source-file": "documents.json",
+          "document-count": 33659481
+        }
+      ]
+    }
+  ],
+  "schedule": [
+    {
+      "operation": {
+        "operation-type": "delete-index"
+      }
+    },
+    {
+      "operation": {
+        "operation-type": "create-index"
+      }
+    },
+    {
+      "operation": {
+        "operation-type": "bulk",
+        "bulk-size": 5000
+      },
+      "warmup-time-period": 0
+    }
+  ]
+}

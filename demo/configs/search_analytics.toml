@@ -1,0 +1,23 @@
+# ai
+# 🔍 Search Analytics — 100k docs of "what did they even search for"
+# "The most searched term is 'how to quit'. HR does not find this funny." 🦆
+
+[runtime]
+queue_capacity = 8
+sink_parallelism = 8
+
+[source.Elasticsearch]
+url = "http://localhost:9200"
+index = "search_analytics"
+
+[sink.OpenSearch]
+url = "http://localhost:9201"
+index = "search_analytics"
+danger_accept_invalid_certs = false
+
+[throttle.source]
+max_batch_size_bytes = 131072
+max_batch_size_docs = 10000
+
+[throttle.sink]
+max_request_size_bytes = 131072

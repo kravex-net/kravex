@@ -1,0 +1,40 @@
+{
+  "version": 2,
+  "description": "# ai — PMC bulk indexing benchmark track. 574K PubMed Central full-text article docs. Throughput-only, dynamic mapping. AI-generated for Kravex benchmark suite.",
+  "indices": [
+    {
+      "name": "pmc",
+      "body": "index.json"
+    }
+  ],
+  "corpora": [
+    {
+      "name": "pmc",
+      "documents": [
+        {
+          "source-file": "documents.json",
+          "document-count": 574199
+        }
+      ]
+    }
+  ],
+  "schedule": [
+    {
+      "operation": {
+        "operation-type": "delete-index"
+      }
+    },
+    {
+      "operation": {
+        "operation-type": "create-index"
+      }
+    },
+    {
+      "operation": {
+        "operation-type": "bulk",
+        "bulk-size": 5000
+      },
+      "warmup-time-period": 0
+    }
+  ]
+}

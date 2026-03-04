@@ -1,0 +1,22 @@
+# ai
+# Kravex config: migrate geonames from Elasticsearch → OpenSearch
+# Used by migration_loop.py benchmark
+
+[runtime]
+queue_capacity = 16
+sink_parallelism = 4
+
+[source.Elasticsearch]
+url = "http://localhost:9200"
+index = "geonames"
+
+[sink.OpenSearch]
+url = "http://localhost:9201"
+index = "benchmark_geonames"
+
+[throttle.source]
+max_batch_size_docs = 5000
+max_batch_size_bytes = 52428800
+
+[throttle.sink]
+max_request_size_bytes = 52428800

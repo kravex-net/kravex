@@ -22,3 +22,10 @@ target
 .DS_Store
 
 input.json
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Claude Code worktree metadata
+.claude/worktrees/

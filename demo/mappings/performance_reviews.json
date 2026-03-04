@@ -1,0 +1,20 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "review_id": { "type": "keyword" },
+      "employee_id": { "type": "keyword" },
+      "reviewer_id": { "type": "keyword" },
+      "review_period": { "type": "keyword" },
+      "rating": { "type": "float" },
+      "goals_met": { "type": "integer" },
+      "goals_total": { "type": "integer" },
+      "comments": { "type": "text" },
+      "review_date": { "type": "date" },
+      "status": { "type": "keyword" }
+    }
+  }
+}

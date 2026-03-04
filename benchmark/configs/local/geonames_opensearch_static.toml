@@ -1,0 +1,23 @@
+# ai
+# geonames_opensearch_static.toml — File → OpenSearch (local, port 9201), geonames, Static throttle
+# "It's like Elasticsearch but with a different hat on. And an AWS logo. And opinions about licensing."
+# Static throttle: the boomer of throttle modes. "Back in my day we just SENT the bytes."
+# 🦆 (open source duck, forked from the original duck)
+
+[runtime]
+queue_capacity = 16
+sink_parallelism = 4
+
+[source.File]
+file_name = "benchmark/data/geonames.json"
+
+[sink.OpenSearch]
+url = "http://localhost:9201"
+index = "benchmark_geonames"
+
+[throttle.source]
+max_batch_size_docs = 5000
+max_batch_size_bytes = 52428800
+
+[throttle.sink]
+max_request_size_bytes = 52428800

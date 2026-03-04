@@ -1,0 +1,23 @@
+# ai
+# 📚 Learning Records — 50k docs of mandatory compliance training
+# "Everyone completed the training. Nobody learned anything." 🦆
+
+[runtime]
+queue_capacity = 8
+sink_parallelism = 6
+
+[source.Elasticsearch]
+url = "http://localhost:9200"
+index = "learning_records"
+
+[sink.OpenSearch]
+url = "http://localhost:9201"
+index = "learning_records"
+danger_accept_invalid_certs = false
+
+[throttle.source]
+max_batch_size_bytes = 131072
+max_batch_size_docs = 5000
+
+[throttle.sink]
+max_request_size_bytes = 131072

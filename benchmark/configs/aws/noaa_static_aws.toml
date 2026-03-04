@@ -1,0 +1,26 @@
+# ai
+# noaa_static_aws.toml — File → AWS OpenSearch managed, NOAA weather, Static throttle
+# "I used to hate async code... but now I await it." — also: I used to hate AWS bills, but now I await them.
+# NOAA weather data into the cloud. Because local weather data just isn't expensive enough.
+# Replace YOUR_OPENSEARCH_ENDPOINT_HERE or the rain will never get indexed.
+# 🦆 (duck under a cloud ☁️, literally, AWS cloud, this is a metaphor)
+
+[runtime]
+queue_capacity = 16
+sink_parallelism = 8
+
+[source.File]
+file_name = "benchmark/data/noaa.ndjson"
+
+[sink.OpenSearch]
+url = "https://YOUR_OPENSEARCH_ENDPOINT_HERE"
+username = "admin"
+password = "YOUR_PASSWORD_HERE"
+index = "benchmark_noaa"
+
+[throttle.source]
+max_batch_size_docs = 5000
+max_batch_size_bytes = 52428800
+
+[throttle.sink]
+max_request_size_bytes = 52428800

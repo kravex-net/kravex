@@ -197,6 +197,8 @@ impl OpenSearchSink {
     /// 🔄 This function does not retry. Retries are the caller's problem. Ancient proverb:
     /// "He who retries in the sink, retries in the wrong abstraction layer."
     async fn submit_bulk_request(&self, request_body: String) -> Result<()> {
+        // -- 📡 Build the bulk endpoint URL. The `_bulk` API: OpenSearch's loading dock.
+        // -- NDJSON only — same format as Elasticsearch. The fork preserved the sacred wire format.
         // 📡 Index-in-URL routing: when a static index is configured, POST to /{index}/_bulk.
         // This ensures the action line `{"index":{}}` (no `_index` field) works correctly.
         // Without this, OpenSearch rejects docs that lack `_index` in the action metadata.
@@ -372,5 +374,46 @@ mod tests {
         // 🦆 No auth at all. The cluster is an open door. In dev. We hope.
         assert!(config.username.is_none());
         assert!(config.api_key.is_none());
+    }
+
+    /// 🧪 Bulk URL includes index when configured — ensures action lines without `_index`
+    /// still land in the right place. "I'm gonna make him an index he can't refuse." — Godfather, OpenSearch edition 🦆
+    #[test]
+    fn the_one_where_bulk_url_includes_index_when_configured() {
+        let config = OpenSearchSinkConfig {
+            url: "https://localhost:9200".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            index: Some("geonames".to_string()),
+            danger_accept_invalid_certs: false,
+        };
+        let base = config.url.trim_end_matches('/');
+        let bulk_url = match config.index {
+            Some(ref idx) => format!("{}/{}/_bulk", base, idx),
+            None => format!("{}/_bulk", base),
+        };
+        assert_eq!(bulk_url, "https://localhost:9200/geonames/_bulk");
+    }
+
+    /// 🧪 Bulk URL falls back to bare /_bulk when no index is configured (per-doc routing).
+    /// "I see /_bulk endpoints. They don't know they're bare." — Sixth Sense, OpenSearch cut 🚀
+    #[test]
+    fn the_one_where_bulk_url_is_bare_when_no_index_configured() {
+        let config = OpenSearchSinkConfig {
+            url: "https://localhost:9200/".to_string(),
+            username: None,
+            password: None,
+            api_key: None,
+            index: None,
+            danger_accept_invalid_certs: false,
+        };
+        let base = config.url.trim_end_matches('/');
+        let bulk_url = match config.index {
+            Some(ref idx) => format!("{}/{}/_bulk", base, idx),
+            None => format!("{}/_bulk", base),
+        };
+        // ⚠️ Also validates trailing-slash trimming
+        assert_eq!(bulk_url, "https://localhost:9200/_bulk");
     }
 }

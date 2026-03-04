@@ -1,0 +1,38 @@
+# ai
+# noaa_opensearch_pid.toml — File → OpenSearch (local, port 9201), NOAA weather, PID throttle
+# "What's the DEAL with response time targets? You pick 5 seconds, the cluster picks chaos."
+# Seinfeld would not survive a 429 backoff. Jerry, you have to WAIT. The controller is adjusting.
+# PID + weather data + OpenSearch = science. Probably. We have a set_point so it counts.
+# 🦆 (Seinfeld laugh track, but it's just the duck)
+
+[runtime]
+queue_capacity = 16
+sink_parallelism = 4
+
+[source.File]
+file_name = "benchmark/data/noaa.json"
+
+[sink.OpenSearch]
+url = "http://localhost:9201"
+index = "benchmark_noaa"
+
+[throttle.source]
+max_batch_size_docs = 5000
+max_batch_size_bytes = 52428800
+
+[throttle.source.controller]
+type = "pid_bytes_to_doc_count"
+desired_response_size_bytes = 5242880.0
+initial_doc_count = 1000
+min_doc_count = 100
+max_doc_count = 10000
+
+[throttle.sink]
+max_request_size_bytes = 52428800
+
+[throttle.sink.mode]
+mode = "Pid"
+set_point_ms = 5000.0
+min_bytes = 1048576
+max_bytes = 52428800
+initial_output_bytes = 10485760
