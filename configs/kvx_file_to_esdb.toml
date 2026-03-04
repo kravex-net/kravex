@@ -9,7 +9,7 @@ queue_capacity = 10
 sink_parallelism = 5
 
 [source_config.File]
-file_name = "benchmark/rally-documents/noaa_documents.json"
+file_name = "benchmark/data/geonames.json"
 
 [source_config.File.common_config]
 max_batch_size_bytes = 131072

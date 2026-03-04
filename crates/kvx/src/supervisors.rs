@@ -12,10 +12,10 @@
 //! 💀 WORKERS ARE SUPERVISORS PRIVATE LITTLE MINIONS WHOM THE WORLD FORGOT ABOUT
 //! 🔒 Like Fight Club, but for async tasks. First rule: you don't pub the workers.
 
-mod workers;
 use crate::app_config::AppConfig;
 use crate::composers::ComposerBackend;
-use crate::supervisors::workers::Worker;
+use crate::workers::Worker;
+use crate::workers;
 use crate::transforms::DocumentTransformer;
 use anyhow::{Context, Result};
 
@@ -24,7 +24,7 @@ use anyhow::{Context, Result};
 ///
 /// 🏗️ Built with the same care and attention as IKEA furniture —
 /// looks good in the docs, wobbly in production.
-pub(crate) struct Supervisor {
+pub struct Supervisor {
     /// 🔧 The sacred scrolls of configuration, passed down from main()
     /// through the ancient ritual of .clone()
     app_config: AppConfig,
@@ -33,7 +33,7 @@ pub(crate) struct Supervisor {
 impl Supervisor {
     /// 🚀 Birth of a Supervisor. It's like a baby, but less crying.
     /// Actually no, there's plenty of crying. Mostly from the developer.
-    pub(crate) fn new(app_config: AppConfig) -> Self {
+    pub fn new(app_config: AppConfig) -> Self {
         // -- 🐛 "My therapist says I should let go of control"
         // -- — said no supervisor ever
         Self { app_config }
@@ -50,7 +50,7 @@ impl Supervisor {
     /// Each SinkWorker gets its own clone of the `DocumentTransformer` and `ComposerBackend`.
     /// Since transforms and composers are zero-sized structs, cloning is free.
     /// The Composer handles both transformation AND assembly — the Cow lives there. 🐄
-    pub(crate) async fn start_workers(
+    pub async fn start_workers(
         &self,
         source_backend: crate::backends::SourceBackend,
         sink_backends: Vec<crate::backends::SinkBackend>,

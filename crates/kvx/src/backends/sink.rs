@@ -23,7 +23,7 @@ use crate::backends::{elasticsearch, file, in_mem};
 /// - Sink does: I/O. Just I/O. HTTP POST, file write, memory push. Nothing else.
 /// - Ancient proverb: "He who puts business logic in the Sink, debugs in production."
 #[async_trait]
-pub(crate) trait Sink: std::fmt::Debug {
+pub trait Sink: std::fmt::Debug {
     /// 📡 Send a fully rendered payload to the destination. I/O only. No questions asked.
     async fn send(&mut self, payload: String) -> Result<()>;
     /// 🗑️ Flush, finalize, and release. Call this. Always. No exceptions. Not even on Fridays.
@@ -39,7 +39,7 @@ pub(crate) trait Sink: std::fmt::Debug {
 /// keeping the supervisor blissfully ignorant of where data actually lands.
 /// Ignorance is a feature. It's called "abstraction." We put it in AGENTS.md.
 #[derive(Debug)]
-pub(crate) enum SinkBackend {
+pub enum SinkBackend {
     InMemory(in_mem::InMemorySink),
     File(file::FileSink),
     Elasticsearch(elasticsearch::ElasticsearchSink),

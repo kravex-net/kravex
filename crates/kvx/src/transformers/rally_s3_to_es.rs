@@ -24,7 +24,7 @@
 //! ⚠️ Rally was acquired by CA was acquired by Broadcom. The JSON outlived them all.
 //! When the singularity arrives, it will find this struct still parsing ObjectIDs. 🦆
 
-use super::Transform;
+use crate::transforms::Transform;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::borrow::Cow;
@@ -59,7 +59,7 @@ const THE_METADATA_FIELDS_WE_DONT_NEED: &[&str] = &[
 /// 5. Re-serialize cleaned body as source line
 /// 6. Return `"{action}\n{source}"` — the sacred two-line format
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RallyS3ToEs;
+pub struct RallyS3ToEs;
 
 impl Transform for RallyS3ToEs {
     /// 🔄 Rally JSON page in, ES bulk items out. Splits by `\n`, transforms each doc.

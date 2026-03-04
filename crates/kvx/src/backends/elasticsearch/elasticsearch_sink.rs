@@ -51,7 +51,7 @@ pub struct ElasticsearchSinkConfig {
 /// Knock knock. Who's there? HTTP POST. HTTP POST who? HTTP POST your NDJSON
 /// and hope the cluster's in a good mood.
 #[derive(Debug)]
-pub(crate) struct ElasticsearchSink {
+pub struct ElasticsearchSink {
     client: reqwest::Client,
     sink_config: ElasticsearchSinkConfig,
 }
@@ -96,7 +96,7 @@ impl ElasticsearchSink {
     ///
     /// ⚠️ Basic auth is used for the connectivity ping. API key is used for the index check.
     /// Pick your auth adventure, but be consistent about it in your config.
-    pub(crate) async fn new(config: ElasticsearchSinkConfig) -> Result<Self> {
+    pub async fn new(config: ElasticsearchSinkConfig) -> Result<Self> {
         // 🔧 Build the HTTP client. 10 second connect timeout because if ES can't handshake
         // in 10 seconds, it's not having a good time and neither are we. 30 second response
         // timeout because bulk requests can be meaty and we're not monsters.

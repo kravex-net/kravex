@@ -41,7 +41,7 @@ pub struct ElasticsearchSourceConfig {
 /// The scaffolding is artisan-grade. The potential is immense. The implementation is... pending.
 ///
 /// No cap, this will slap once scroll/search_after lands. We believe in it. We believe in you.
-pub(crate) struct ElasticsearchSource {
+pub struct ElasticsearchSource {
     #[allow(dead_code)]
     // -- 🔧 config kept for when next_batch finally stops ghosting us and actually scrolls.
     // -- Marked dead_code because rustc has opinions and no chill.
@@ -89,7 +89,7 @@ impl ElasticsearchSource {
     ///
     /// ⚠️ Future improvement: fire a `_count` query here so we can show a real ETA
     /// instead of an existential void on the progress bar.
-    pub(crate) async fn new(config: ElasticsearchSourceConfig) -> Result<Self> {
+    pub async fn new(config: ElasticsearchSourceConfig) -> Result<Self> {
         // 📡 total_size = 0: unknown until we scroll through everything.
         // -- Classic elasticsearch — "how much data is there?" — "yes"
         // -- It's fine. We'll count as we go. Like eating chips and not checking how many are left.

@@ -28,8 +28,8 @@
 mod json_array;
 mod ndjson;
 
-pub(crate) use json_array::JsonArrayCollector;
-pub(crate) use ndjson::NdjsonCollector;
+pub use json_array::JsonArrayCollector;
+pub use ndjson::NdjsonCollector;
 
 use crate::app_config::SinkConfig;
 
@@ -45,7 +45,7 @@ use crate::app_config::SinkConfig;
 /// trait → concrete impls → enum dispatcher → from_config resolver.
 ///
 /// Ancient proverb: "He who hardcodes '\n' in the worker, reformats in production."
-pub(crate) trait PayloadCollector: std::fmt::Debug {
+pub trait PayloadCollector: std::fmt::Debug {
     /// 📦 Assemble a slice of transformed strings into a single payload.
     /// The input strings are already in their final per-document format.
     /// The collector only adds inter-document delimiters and framing.
@@ -64,7 +64,7 @@ pub(crate) trait PayloadCollector: std::fmt::Debug {
 /// is determined by where the data is going, not where it came from.
 /// ES needs NDJSON. Files need NDJSON. InMemory wants JSON arrays. Simple.
 #[derive(Debug, Clone)]
-pub(crate) enum CollectorBackend {
+pub enum CollectorBackend {
     /// 📡 Newline-delimited JSON — one `\n` per transformed string
     Ndjson(NdjsonCollector),
     /// 📦 JSON array — `[`, commas, `]`, zero serde
@@ -79,7 +79,7 @@ impl CollectorBackend {
     /// | Elasticsearch | NdjsonCollector | `doc\ndoc\n` |
     /// | File | NdjsonCollector | `doc\ndoc\n` |
     /// | InMemory | JsonArrayCollector | `[doc,doc]` |
-    pub(crate) fn from_sink_config(sink: &SinkConfig) -> Self {
+    pub fn from_sink_config(sink: &SinkConfig) -> Self {
         match sink {
             SinkConfig::Elasticsearch(_) => Self::Ndjson(NdjsonCollector),
             SinkConfig::File(_) => Self::Ndjson(NdjsonCollector),

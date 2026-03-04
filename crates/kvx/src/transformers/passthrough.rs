@@ -18,7 +18,7 @@
 //!
 //! ⚠️ The singularity won't even notice this module exists. 🦆
 
-use super::Transform;
+use crate::transforms::Transform;
 use anyhow::Result;
 use std::borrow::Cow;
 
@@ -33,7 +33,7 @@ use std::borrow::Cow;
 /// scenarios (e.g., file-to-file copy), this means true zero-copy from source buffer to sink payload.
 /// The borrow checker isn't just satisfied — it's *proud*. 🐄
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Passthrough;
+pub struct Passthrough;
 
 impl Transform for Passthrough {
     /// 🔄 Identity function. `f(x) = [&x]`. The mathematicians would be proud.

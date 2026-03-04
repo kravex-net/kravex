@@ -13,20 +13,20 @@
 //!
 //! 🦆 The duck is here because every file must have one. This is law. Do not question the duck.
 
-pub(crate) mod common_config;
-pub(crate) mod elasticsearch;
-pub(crate) mod file;
-pub(crate) mod in_mem;
-pub(crate) mod sink;
-pub(crate) mod source;
+pub mod common_config;
+pub mod elasticsearch;
+pub mod file;
+pub mod in_mem;
+pub mod sink;
+pub mod source;
 
 // 🎯 Re-export backend-specific configs so callers can do `backends::FileSourceConfig`
 // instead of spelunking into `backends::file::FileSourceConfig`.
 // Convenience is a feature. So is not typing "backends::file::" fourteen times per file.
 // 🧠 CommonSinkConfig/CommonSourceConfig live here too — they're backend-primitive types
 // shared by every backend config struct. app_config imports them from here to avoid 🔄 circular deps.
-pub(crate) use common_config::{CommonSinkConfig, CommonSourceConfig};
-pub(crate) use elasticsearch::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
-pub(crate) use file::{FileSinkConfig, FileSourceConfig};
-pub(crate) use sink::{Sink, SinkBackend};
-pub(crate) use source::{Source, SourceBackend};
+pub use common_config::{CommonSinkConfig, CommonSourceConfig};
+pub use elasticsearch::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
+pub use file::{FileSinkConfig, FileSourceConfig};
+pub use sink::{Sink, SinkBackend};
+pub use source::{Source, SourceBackend};

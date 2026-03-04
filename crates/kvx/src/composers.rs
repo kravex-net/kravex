@@ -28,14 +28,14 @@
 use crate::transforms::{DocumentTransformer, Transform};
 use anyhow::Result;
 
-pub(crate) mod backend;
-pub(crate) mod json_array;
-pub(crate) mod ndjson;
+pub mod backend;
+pub mod json_array;
+pub mod ndjson;
 
 // -- 🔁 Re-export concrete types so consumers use `crate::composers::ComposerBackend` unchanged
-pub(crate) use backend::ComposerBackend;
-pub(crate) use json_array::JsonArrayComposer;
-pub(crate) use ndjson::NdjsonComposer;
+pub use backend::ComposerBackend;
+pub use json_array::JsonArrayComposer;
+pub use ndjson::NdjsonComposer;
 
 // ===== Trait =====
 
@@ -49,7 +49,7 @@ pub(crate) use ndjson::NdjsonComposer;
 /// trait → concrete impls → enum dispatcher → from_config resolver.
 ///
 /// Knock knock. Who's there? Cow. Cow who? Cow::Borrowed — I didn't even allocate to get here. 🐄
-pub(crate) trait Composer: std::fmt::Debug {
+pub trait Composer: std::fmt::Debug {
     /// 🎼 Transform raw pages and assemble items into a single payload string.
     ///
     /// The input pages are raw source data (untransformed). The transformer is called

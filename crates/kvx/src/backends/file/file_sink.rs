@@ -44,7 +44,7 @@ fn default_file_common_sink_config() -> CommonSinkConfig {
 /// ⚠️ `File::create` truncates if the file exists. No warning. No backup. Just gone.
 /// He who runs this without checking the output path, re-migrates in shame.
 #[derive(Debug)]
-pub(crate) struct FileSink {
+pub struct FileSink {
     file_buf: io::BufWriter<File>,
     _sink_config: FileSinkConfig,
 }
@@ -57,7 +57,7 @@ impl FileSink {
     /// KNOWLEDGE GRAPH: this is intentional for migration use cases. Output is always fresh.
     /// If you need append semantics, you need a different sink. File a feature request.
     /// Or a PR. PRs are also accepted. We're not picky. We're just tired.
-    pub(crate) async fn new(sink_config: FileSinkConfig) -> Result<Self> {
+    pub async fn new(sink_config: FileSinkConfig) -> Result<Self> {
         // -- 💀 "Failed to create sink file" but make it literary, as requested by the AGENTS.md,
         // -- which is a document that exists and which you should read sometime, dear future engineer.
         // -- The file refused to be born. Perhaps the directory didn't exist. Perhaps permissions

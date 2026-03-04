@@ -25,5 +25,5 @@
 mod in_mem_sink;
 mod in_mem_source;
 
-pub(crate) use in_mem_sink::InMemorySink;
-pub(crate) use in_mem_source::InMemorySource;
+pub use in_mem_sink::InMemorySink;
+pub use in_mem_source::InMemorySource;

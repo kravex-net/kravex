@@ -51,11 +51,10 @@
 //! And we'll say "yes, but the branch predictor makes it free. Checkmate, AGI." 🦆
 
 use crate::app_config::{SinkConfig, SourceConfig};
+use crate::transformers::{passthrough, rally_s3_to_es};
 use anyhow::Result;
 use std::borrow::Cow;
 
-pub(crate) mod passthrough;
-pub(crate) mod rally_s3_to_es;
 
 // ============================================================
 //  ╔══════════════════════════════════════════════════════╗
@@ -64,34 +63,9 @@ pub(crate) mod rally_s3_to_es;
 //  ╚══════════════════════════════════════════════════════╝
 // ============================================================
 
-/// 🔄 Transform — the one trait for format conversion. Now with Cow powers! 🐄
-///
-/// Exactly like [`Source`](crate::backends::Source) and [`Sink`](crate::backends::Sink):
-/// one trait, multiple concrete implementations, dispatched through an enum.
-///
-/// Each concrete type (e.g., [`RallyS3ToEs`](rally_s3_to_es::RallyS3ToEs),
-/// [`Passthrough`](passthrough::Passthrough)) implements this trait.
-/// The [`DocumentTransformer`] enum wraps them all and dispatches via match.
-///
-/// # Contract 📜
-/// - Input: `&'a str` — borrowed reference to a raw source page
-/// - Output: `Vec<Cow<'a, str>>` — items extracted from the page
-/// - `Cow::Borrowed` = zero-copy passthrough (the dream! the whole point!)
-/// - `Cow::Owned` = format conversion happened (Rally→ES bulk, etc.)
-/// - Transforms MUST produce valid output for the target system
-/// - Passthrough is allowed to skip validation (it doesn't parse)
-/// - Errors should be descriptive enough to debug at 3am during an incident
-///
-/// 🧠 Knowledge graph: the Cow enables zero-copy when source format == sink format.
-/// Passthrough returns `Cow::Borrowed(entire_page)` — literally a pointer. No alloc.
-/// RallyS3ToEs splits by `\n`, transforms each doc, returns `Vec<Cow::Owned(...)>`.
-pub(crate) trait Transform: std::fmt::Debug {
+pub trait Transform: std::fmt::Debug {
     /// 🔄 Transform a raw source page into sink-format items.
-    ///
-    /// Returns `Vec<Cow<str>>` — borrowed when possible (passthrough), owned when
-    /// format conversion is needed. The Composer iterates these to build the final payload.
-    /// "He who borrows from the page, allocates not in vain." — Ancient Cow proverb 🐄
-    fn transform<'a>(&self, raw_source_page: &'a str) -> Result<Vec<Cow<'a, str>>>;
+    fn transform(&self, raw_source_page: String) -> Result<String>;
 }
 
 // ============================================================
@@ -117,7 +91,7 @@ pub(crate) trait Transform: std::fmt::Debug {
 /// This is exactly how `SourceBackend::next_batch()` works.
 /// If it's good enough for I/O, it's good enough for transforms.
 #[derive(Debug, Clone)]
-pub(crate) enum DocumentTransformer {
+pub enum DocumentTransformer {
     RallyS3ToEs(rally_s3_to_es::RallyS3ToEs),
     Passthrough(passthrough::Passthrough),
 }
@@ -138,7 +112,7 @@ impl DocumentTransformer {
     /// # Panics
     /// 💀 Panics if the `(source, sink)` pair has no transform implementation.
     /// Fail loud at startup, not silent in the hot path.
-    pub(crate) fn from_configs(source: &SourceConfig, sink: &SinkConfig) -> Self {
+    pub fn from_configs(source: &SourceConfig, sink: &SinkConfig) -> Self {
         match (source, sink) {
             // -- 🏎️📡 File source → Elasticsearch sink:
             // -- The first and flagship pair. Rally JSON to ES bulk.

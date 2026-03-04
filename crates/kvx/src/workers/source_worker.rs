@@ -29,7 +29,7 @@ use tracing::debug;
 /// The channel carries `String`. The SinkWorker buffers pages, then flushes via Composer.
 /// Like a barista, but for data. And less tips. And the drinks are just raw bytes.
 #[derive(Debug)]
-pub(crate) struct SourceWorker {
+pub struct SourceWorker {
     tx: Sender<String>,
     source: SourceBackend,
 }
@@ -40,7 +40,7 @@ impl SourceWorker {
     /// Give it a sender (where the raw pages go) and a source backend (where the data comes from).
     /// It will faithfully poll `next_page()` like a golden retriever waiting by the door.
     /// `None` = the retriever goes home. The channel closes. 🐕
-    pub(crate) fn new(tx: Sender<String>, source: SourceBackend) -> Self {
+    pub fn new(tx: Sender<String>, source: SourceBackend) -> Self {
         Self { tx, source }
     }
 }

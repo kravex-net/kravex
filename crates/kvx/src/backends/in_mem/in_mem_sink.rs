@@ -19,10 +19,10 @@ use crate::backends::{Sink, Source};
 /// pipeline. The `Arc` means everyone shares the same Vec. Communist data, but
 /// in a good way. The borrow checker approved. Barely. It had notes.
 #[derive(Debug, Default, Clone)]
-pub(crate) struct InMemorySink {
+pub struct InMemorySink {
     /// 🔒 The vault. The evidence locker. Each entry = one fully rendered payload string.
     /// Arc so multiple owners can hold a reference. Mutex so only one panics at a time.
-    pub(crate) received: std::sync::Arc<tokio::sync::Mutex<Vec<String>>>,
+    pub received: std::sync::Arc<tokio::sync::Mutex<Vec<String>>>,
 }
 
 impl InMemorySink {
@@ -32,7 +32,7 @@ impl InMemorySink {
     /// Conspiracy theory: `tokio::sync::Mutex` is just `std::sync::Mutex` wearing
     /// a trench coat to look taller in async contexts. I have no proof. I have
     /// strong feelings.
-    pub(crate) async fn new() -> Result<Self> {
+    pub async fn new() -> Result<Self> {
         // -- ✅ Birth of the sink. An empty Vec, full of potential, unmarred by batches.
         // -- This is the most hopeful a Vec will ever be. Downhill from here.
         Ok(Self {

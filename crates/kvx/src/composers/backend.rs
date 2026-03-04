@@ -36,7 +36,7 @@ use anyhow::Result;
 /// is determined by where the data is going, not where it came from.
 /// ES needs NDJSON. Files need NDJSON. InMemory wants JSON arrays. Simple.
 #[derive(Debug, Clone)]
-pub(crate) enum ComposerBackend {
+pub enum ComposerBackend {
     /// 📡 Newline-delimited JSON — transform + join with `\n`
     Ndjson(NdjsonComposer),
     /// 📦 JSON array — transform + wrap in `[`, commas, `]`
@@ -54,7 +54,7 @@ impl ComposerBackend {
     ///
     /// 🧠 Format follows the sink, not the source. The sink decides the wire format.
     /// This is the one true law. Do not question it. The borrow checker already has enough opinions.
-    pub(crate) fn from_sink_config(sink: &SinkConfig) -> Self {
+    pub fn from_sink_config(sink: &SinkConfig) -> Self {
         match sink {
             // -- 📡 ES bulk requires NDJSON — action+source pairs, trailing \n
             SinkConfig::Elasticsearch(_) => Self::Ndjson(NdjsonComposer),

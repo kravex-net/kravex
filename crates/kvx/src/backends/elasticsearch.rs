@@ -8,5 +8,5 @@
 mod elasticsearch_sink;
 mod elasticsearch_source;
 
-pub(crate) use elasticsearch_sink::{ElasticsearchSink, ElasticsearchSinkConfig};
-pub(crate) use elasticsearch_source::{ElasticsearchSource, ElasticsearchSourceConfig};
+pub use elasticsearch_sink::{ElasticsearchSink, ElasticsearchSinkConfig};
+pub use elasticsearch_source::{ElasticsearchSource, ElasticsearchSourceConfig};

@@ -82,7 +82,7 @@ struct Rates {
 ///
 /// # Ancient Proverb
 /// "He who runs a migration without a progress bar, migrates alone and in darkness."
-pub(crate) struct ProgressMetrics {
+pub struct ProgressMetrics {
     /// 🏷️ what are we even migrating? a name to display in the UI
     source_name: String,
     /// 📏 total size in bytes — 0 if we have no idea (classic elasticsearch)
@@ -121,7 +121,7 @@ impl ProgressMetrics {
     ///
     /// # No cap
     /// This function slaps. fr fr. The progress bar will look sick in your terminal.
-    pub(crate) fn new(source_name: String, total_size: u64) -> Self {
+    pub fn new(source_name: String, total_size: u64) -> Self {
         // -- 🎨 build the progress bar — cyan because it's classy, blue because it's calm
         let progress_bar = ProgressBar::new(total_size);
         progress_bar.set_style(
@@ -152,7 +152,7 @@ impl ProgressMetrics {
     ///
     /// Call this after every batch read. It accumulates totals, recalculates rates,
     /// re-renders the table, and updates the bar position. Like a treadmill, but useful.
-    pub(crate) fn update(&mut self, bytes_read: u64, docs_read: u64) {
+    pub fn update(&mut self, bytes_read: u64, docs_read: u64) {
         // -- 📦 accumulate the stats — they compound like a 401k, except real
         self.total_bytes += bytes_read;
         self.total_docs += docs_read;
@@ -165,7 +165,7 @@ impl ProgressMetrics {
 
     /// ✅ Mark the progress bar done. Ring the bell. We made it.
     /// (Or we hit EOF. Same energy.)
-    pub(crate) fn finish(&self) {
+    pub fn finish(&self) {
         self.progress_bar.finish();
     }
 

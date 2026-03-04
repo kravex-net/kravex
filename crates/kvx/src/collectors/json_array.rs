@@ -30,7 +30,7 @@ use super::PayloadCollector;
 ///
 /// TODO: win the lottery, retire, replace this with serde_json::to_string. (never)
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct JsonArrayCollector;
+pub struct JsonArrayCollector;
 
 impl PayloadCollector for JsonArrayCollector {
     #[inline]

@@ -33,7 +33,7 @@ use anyhow::Result;
 /// No brackets to hold them. No commas to connect them. Just newlines. And silence.
 /// Like my social life after deploying to production on a Friday. 🦆
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct NdjsonComposer;
+pub struct NdjsonComposer;
 
 impl Composer for NdjsonComposer {
     #[inline]

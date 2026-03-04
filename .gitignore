@@ -21,4 +21,9 @@ target
 #.idea/
 .DS_Store
 
+.claude/worktrees/
 input.json
+
+benchmark/data/
+benchmark/results/
+__pycache__

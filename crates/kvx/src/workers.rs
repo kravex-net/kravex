@@ -18,12 +18,12 @@ use anyhow::Result;
 use tokio::task::JoinHandle;
 
 mod sink_worker;
-pub(crate) use sink_worker::SinkWorker;
+pub use sink_worker::SinkWorker;
 mod source_worker;
-pub(crate) use source_worker::SourceWorker;
+pub use source_worker::SourceWorker;
 
 /// 🏗️ A background worker, that does work. duh.
-pub(crate) trait Worker {
+pub trait Worker {
     /// 🚀 Start the worker.
     fn start(self) -> JoinHandle<Result<()>>;
 }

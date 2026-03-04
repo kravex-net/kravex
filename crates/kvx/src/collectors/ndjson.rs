@@ -31,7 +31,7 @@ use super::PayloadCollector;
 /// Rust borrow checker trauma: the borrow checker approved this function on the first try.
 /// We are still suspicious. Something must be wrong.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct NdjsonCollector;
+pub struct NdjsonCollector;
 
 impl PayloadCollector for NdjsonCollector {
     #[inline]

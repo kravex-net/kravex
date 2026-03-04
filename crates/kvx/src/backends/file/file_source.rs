@@ -47,7 +47,7 @@ fn default_file_common_source_config() -> CommonSourceConfig {
 /// 📊 Tracks progress via `ProgressMetrics` — bytes read, docs read, reported to a progress table.
 /// ⚠️  If the file is being written to while we read it, the size estimate will be wrong.
 ///     This is fine. We are fine. Everything is fine. 🐛
-pub(crate) struct FileSource {
+pub struct FileSource {
     buf_reader: io::BufReader<File>,
     source_config: FileSourceConfig,
     // -- 📊 progress tracker — because "it's running" is not a status update.
@@ -80,7 +80,7 @@ impl FileSource {
     /// No cap: `File::open` is async here because we're in tokio-land. This is not your
     /// grandfather's `std::fs::File::open`. This is `std::fs::File::open`'s cooler younger sibling
     /// who got into the async runtime scene and never looked back.
-    pub(crate) async fn new(source_config: FileSourceConfig) -> Result<Self> {
+    pub async fn new(source_config: FileSourceConfig) -> Result<Self> {
         // -- 💀 The door. It's locked. Or it doesn't exist. Or the filesystem lied to you.
         // -- In any case, the source file refused to open — like a very stubborn bouncer
         // -- at an exclusive club where the club is just a text file and we are very small data.

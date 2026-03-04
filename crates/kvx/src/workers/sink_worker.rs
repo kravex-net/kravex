@@ -58,7 +58,7 @@ const BUFFER_EPSILON_BYTES: usize = 64 * 1024; // -- 64 KiB of safety net for th
 /// 4. **Send**: payload → Sink (HTTP POST, file write, memory push)
 /// 5. **Repeat** until channel closes, then flush remaining buffer
 #[derive(Debug)]
-pub(crate) struct SinkWorker {
+pub struct SinkWorker {
     rx: Receiver<String>,
     sink: SinkBackend,
     /// 🔄 Per-page format conversion — resolves from (SourceConfig, SinkConfig).
@@ -76,7 +76,7 @@ impl SinkWorker {
     /// The composer decides HOW to assemble them (NDJSON newlines, JSON array brackets)
     /// The sink decides WHERE to send it (HTTP POST, file write, memory push)
     /// The worker decides WHEN — "when the buffer is full enough, no cap." 🦆
-    pub(crate) fn new(
+    pub fn new(
         rx: Receiver<String>,
         sink: SinkBackend,
         transformer: DocumentTransformer,

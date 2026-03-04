@@ -21,7 +21,7 @@ use crate::backends::{elasticsearch, file, in_mem};
 /// - Source is a data faucet 🚿 — it pours, the pipeline catches
 /// - **Zero-copy enabled**: Source doesn't split docs, Composer borrows from buffered pages via Cow
 #[async_trait]
-pub(crate) trait Source: std::fmt::Debug {
+pub trait Source: std::fmt::Debug {
     /// 📄 Fetch the next raw page of data.
     ///
     /// Returns `Ok(Some(page))` while data flows — one page per call, content uninterpreted.
@@ -39,7 +39,7 @@ pub(crate) trait Source: std::fmt::Debug {
 /// Think of it as a universal remote. Except it only controls data ingestion. And it's async.
 /// And there is no warranty. Ancient proverb: "He who hardcodes the backend, migrates only once."
 #[derive(Debug)]
-pub(crate) enum SourceBackend {
+pub enum SourceBackend {
     InMemory(in_mem::InMemorySource),
     File(file::FileSource),
     Elasticsearch(elasticsearch::ElasticsearchSource),

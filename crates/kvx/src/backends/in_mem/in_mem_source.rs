@@ -16,7 +16,7 @@ use crate::backends::Source;
 /// The Composer downstream handles splitting + transforming via the Transformer.
 /// This enables zero-copy passthrough when formats match. The source doesn't care. It shouldn't.
 #[derive(Debug, Default)]
-pub(crate) struct InMemorySource {
+pub struct InMemorySource {
     /// 🔒 The virginity of this source — once yielded, forever yielded.
     /// Like watching a movie spoiler. Can't un-yield it.
     /// The borrow checker wished it could reject this concept. It could not.
@@ -30,7 +30,7 @@ impl InMemorySource {
     /// You call `new()`, you get a fresh source, hat tips are exchanged.
     /// It's async because we respect the trait contract, not because we need it.
     /// Ancient proverb: "He who makes everything async learns nothing, but ships faster."
-    pub(crate) async fn new() -> Result<Self> {
+    pub async fn new() -> Result<Self> {
         // -- ✅ No config to load, no server to ping, no prayers to send.
         // -- This is the most peaceful constructor in the entire codebase.
         // -- Cherish this moment.

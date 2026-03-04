@@ -34,7 +34,7 @@ use anyhow::Result;
 /// Conspiracy theory: the borrow checker is sentient, and it WANTS you to use serde.
 /// We resist. We concatenate manually. We are free. 🐄
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct JsonArrayComposer;
+pub struct JsonArrayComposer;
 
 impl Composer for JsonArrayComposer {
     #[inline]
