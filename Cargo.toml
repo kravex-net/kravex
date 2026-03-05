@@ -13,6 +13,9 @@ members = ["crates/kvx-cli", "crates/kvx"]
 # 😬 because panic is not a personality trait. well, actually...
 anyhow = "1"
 
+# 🔍 SIMD-powered byte scanning — like a metal detector but for newlines
+memchr = "2"
+
 # ✉️ like passing notes in class but the teacher is the runtime
 async-channel = "2"
 
@@ -48,3 +51,9 @@ indicatif = "0.17"
 
 # 🍽️ a table so comfy it should come with a throw pillow and a cat
 comfy-table = "7"
+
+# 🧪 statistical benchmarking — because "it feels faster" is not a metric
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+# 📁 temp files that clean up after themselves — unlike my desk
+tempfile = "3"
