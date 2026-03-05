@@ -42,7 +42,7 @@ impl Manifold for JsonArrayManifold {
         // -- 📦 First, cast all feeds and collect results
         let mut all_items: Vec<String> = Vec::with_capacity(feeds.len());
         for feed in feeds {
-            let cast_result = caster.cast(feed.clone())?;
+            let cast_result = caster.cast(feed)?;
             all_items.push(cast_result);
         }
 

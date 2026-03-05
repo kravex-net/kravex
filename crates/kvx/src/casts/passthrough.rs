@@ -52,7 +52,7 @@ mod tests {
     fn the_one_where_passthrough_is_the_identity_function() -> Result<()> {
         // 🧪 f(x) = x. If this fails, mathematics is broken. And so is String.
         let the_input = r#"{"untouched":"perfection"}"#.to_string();
-        let the_output = Passthrough.cast(the_input.clone())?;
+        let the_output = Passthrough.cast(&the_input)?;
         assert_eq!(the_output, the_input, "Passthrough must return feed unchanged! 🚶");
         Ok(())
     }
@@ -60,7 +60,7 @@ mod tests {
     #[test]
     fn the_one_where_empty_string_passes_through() -> Result<()> {
         // 🧪 Nothing in, nothing out. The void is consistent. 🧘
-        let the_output = Passthrough.cast(String::new())?;
+        let the_output = Passthrough.cast("")?;
         assert_eq!(the_output, "", "Empty feed → empty output. Zen. 🧘");
         Ok(())
     }
@@ -69,7 +69,7 @@ mod tests {
     fn the_one_where_non_json_also_passes_because_we_dont_validate() -> Result<()> {
         // 🧪 Passthrough doesn't parse. Doesn't validate. Doesn't care.
         let not_json = "this is not json and that's fine".to_string();
-        let the_output = Passthrough.cast(not_json.clone())?;
+        let the_output = Passthrough.cast(&not_json)?;
         assert_eq!(the_output, not_json, "Non-JSON still passes through! 🎉");
         Ok(())
     }
@@ -78,7 +78,7 @@ mod tests {
     fn the_one_where_multi_line_feed_stays_intact() -> Result<()> {
         // 🧪 Passthrough treats the whole feed as one blob — it's the Manifold's job to join
         let multi_line = "line1\nline2\nline3".to_string();
-        let the_output = Passthrough.cast(multi_line.clone())?;
+        let the_output = Passthrough.cast(&multi_line)?;
         assert_eq!(the_output, multi_line, "Passthrough doesn't split — one feed, one output 🎯");
         Ok(())
     }
