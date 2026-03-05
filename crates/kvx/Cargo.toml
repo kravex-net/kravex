@@ -16,3 +16,6 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 indicatif = { workspace = true }
 comfy-table = { workspace = true }
+
+[dev-dependencies]
+wiremock = { workspace = true }

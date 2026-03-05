@@ -11,6 +11,7 @@ Core library for kravex — the data migration engine. Raw pages, Cow-powered ze
 - **Workspace member**: `crates/kvx`
 - **Dependents**: `kvx-cli`
 - **Dependencies**: anyhow, async-channel, figment, reqwest, serde, serde_json, tokio, tracing, async-trait, futures, indicatif, comfy-table
+- **Dev-Dependencies**: wiremock (mock HTTP server for sink/source tests)
 - **Edition**: 2024
 - **Modules**:
   - `app_config` — `AppConfig`, `RuntimeConfig`, `SourceConfig`, `SinkConfig` (Figment-based config loading; owns all top-level config enums)
@@ -143,4 +144,6 @@ lib.rs ──► app_config (RuntimeConfig, SourceConfig, SinkConfig)
 - v6-v9 backend file splits: separated backend implementations into dedicated files with re-export shims
 - v10 raw pages + composers (current): Source returns `Option<String>` (raw page), Transform returns `Vec<Cow<str>>` (zero-copy), Composer replaces Collector (transform+assemble in one shot), SinkWorker buffers by byte size. 31 tests passing.
 - v11 config migration (complete): `RuntimeConfig`/`SourceConfig`/`SinkConfig` → `app_config.rs`; `CommonSinkConfig`/`CommonSourceConfig` → `backends/common_config.rs`; `supervisors/config.rs` deleted; all callers updated. 31 tests passing.
+- v12 elasticsearch sink tests (complete): 21 unit tests added via wiremock mock HTTP server. Covers constructor (ping, index check, auth), bulk POST (success, 4xx/5xx, headers, body integrity), close(), edge cases (trailing slashes, empty payloads). 49 total tests passing.
+- ElasticsearchSink now has 21 unit tests covering: constructor ping, index existence checks, auth priority (ApiKey > Basic), bulk POST success/failure, Content-Type validation, payload integrity, trailing slash handling, close() no-op, and edge cases. Uses wiremock for mock HTTP.
 - S3 source backend not yet implemented
