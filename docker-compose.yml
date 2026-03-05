@@ -15,7 +15,7 @@ services:
       - xpack.security.enabled=false
       - xpack.security.http.ssl.enabled=false
       - bootstrap.memory_lock=true
-      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+      - ES_JAVA_OPTS=-Xms6g -Xmx6g
     ulimits:
       # -- 🔒 memlock: -1 means "unlimited", which sounds terrifying but is correct here
       memlock:

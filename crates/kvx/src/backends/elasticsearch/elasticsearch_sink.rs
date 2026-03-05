@@ -185,7 +185,11 @@ impl ElasticsearchSink {
         // -- NDJSON only — no JSON arrays, no XML, no CSV, no hand-coded tab-separated values.
         // -- NDJSON. The only format Elasticsearch respects. Truly the format of people who
         // -- wanted JSON but also wanted to feel slightly superior about it.
-        let bulk_url = format!("{}/_bulk", self.sink_config.url.trim_end_matches('/'));
+        let bulk_url = match self.sink_config.index {
+            Some(ref index_name) => format!("{}/{}/_bulk", self.sink_config.url.trim_end_matches('/'), index_name),
+            None => format!("{}/_bulk", self.sink_config.url.trim_end_matches('/'))
+        };
+
         let mut request = self
             .client
             .post(&bulk_url)

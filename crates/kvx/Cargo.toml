@@ -26,3 +26,7 @@ tempfile = { workspace = true }
 [[bench]]
 name = "file_source_bench"
 harness = false
+
+[[bench]]
+name = "joiner_bench"
+harness = false

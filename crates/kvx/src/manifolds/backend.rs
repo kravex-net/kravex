@@ -44,6 +44,20 @@ pub enum ManifoldBackend {
 }
 
 impl ManifoldBackend {
+    /// 🔄 Every manifold variant in one neat Vec — for benchmarks that auto-discover new backends.
+    ///
+    /// 🧠 Add a variant to the enum? It shows up in benchmarks automatically.
+    /// Forget to add it here? The compiler won't catch it, but your conscience will. ⚖️
+    /// (Actually, the `match` in this fn IS exhaustive, so the compiler catches it too. Phew.)
+    pub fn all_variants() -> Vec<ManifoldBackend> {
+        vec![
+            // 📡 NDJSON — the lingua franca of bulk APIs everywhere
+            Self::Ndjson(NdjsonManifold),
+            // 📦 JSON array — for when your sink likes brackets more than newlines
+            Self::JsonArray(JsonArrayManifold),
+        ]
+    }
+
     /// 🔧 Resolve the manifold from the sink config.
     ///
     /// | SinkConfig      | Manifold          | Format          |

@@ -5,17 +5,17 @@
 # 🦆
 
 [runtime]
-queue_capacity = 10
-sink_parallelism = 5
+queue_capacity = 32
+sink_parallelism = 8
 
 [source_config.File]
 file_name = "benchmark/data/geonames.json"
 
 [source_config.File.common_config]
-max_batch_size_bytes = 131072
-max_batch_size_docs = 10000
+max_batch_size_bytes = 33554432 # 128 * 1024 is a single read chunk * 256 read Kibibyte
+max_batch_size_docs = 1000000
 
 [sink_config.Elasticsearch]
 url = "http://localhost:9200"
 index = "test-123"
-max_request_size_bytes = 131072
+max_request_size_bytes = 4194304 # 128 * 1024 is a single read chuck * 64 chunks

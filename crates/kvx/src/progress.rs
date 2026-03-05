@@ -248,8 +248,9 @@ impl ProgressMetrics {
             0.0
         };
 
+        let docs_per_min = rates.docs_per_sec * 60.0;
         // -- 🔢 human-friendly numbers because we are, ostensibly, human
-        let docs_rate = format_number(rates.docs_per_sec as u64);
+        let docs_rate = format_number(docs_per_min as u64);
         let docs_total = format_number(self.total_docs);
 
         // ⏱️ time stats
@@ -283,7 +284,7 @@ impl ProgressMetrics {
 
         // 🚀 row 1: throughput rates
         table.add_row(vec![
-            Cell::new(format!("{} Docs/s", docs_rate)).set_alignment(CellAlignment::Right),
+            Cell::new(format!("{} Docs/min", docs_rate)).set_alignment(CellAlignment::Right),
             Cell::new(format!("{} Docs", docs_total)).set_alignment(CellAlignment::Right),
         ]);
         // 📦 row 2: byte throughput and cumulative progress
