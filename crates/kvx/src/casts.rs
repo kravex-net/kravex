@@ -161,7 +161,7 @@ mod tests {
             "_rallyAPIMajor": "2"
         })
         .to_string();
-        let the_output = the_caster.cast(rally_feed)?;
+        let the_output = the_caster.cast(&rally_feed)?;
 
         // ✅ Output should be non-empty (NdJsonToBulk produces action+source lines)
         assert!(!the_output.is_empty(), "Cast output should not be empty 🎯");
@@ -186,7 +186,7 @@ mod tests {
 
         // 🔄 Passthrough returns the feed unchanged — zero drama
         let the_input = r#"{"whatever":"goes"}"#.to_string();
-        let the_output = the_caster.cast(the_input.clone())?;
+        let the_output = the_caster.cast(&the_input)?;
         assert_eq!(the_output, the_input, "Passthrough must return feed unchanged! 🚶");
 
         Ok(())
@@ -236,7 +236,7 @@ mod tests {
             })
         );
 
-        let the_output = the_caster.cast(rally_feed)?;
+        let the_output = the_caster.cast(&rally_feed)?;
         // ✅ NdJsonToBulk should produce non-empty output for a multi-doc feed
         assert!(!the_output.is_empty(), "Cast output should not be empty for multi-doc feed 🎯");
 
