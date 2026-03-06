@@ -12,8 +12,9 @@ pub mod app_config;
 pub mod backends;
 pub mod manifolds;
 pub mod progress;
-mod foreman;
+pub mod foreman;
 pub mod casts;
+pub mod regulators;
 pub mod workers;
 
 use crate::app_config::AppConfig;

@@ -39,7 +39,6 @@ pub trait Caster: std::fmt::Debug {
     fn cast(&self, feed: &str) -> Result<String>;
 }
 
-
 // ===== Enum Dispatcher =====
 
 /// 🎭 The polymorphic caster — dispatches to the right concrete caster at runtime.
