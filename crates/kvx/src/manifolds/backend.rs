@@ -17,7 +17,7 @@
 //!    We said "monomorphization." The duck left. It didn't want a lecture.
 
 use super::{Manifold, JsonArrayManifold, NdjsonManifold};
-use crate::app_config::SinkConfig;
+use crate::config::SinkConfig;
 use crate::casts::DocumentCaster;
 use anyhow::Result;
 

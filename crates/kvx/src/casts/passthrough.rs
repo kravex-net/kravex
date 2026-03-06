@@ -20,6 +20,8 @@
 
 use anyhow::Result;
 use crate::casts::Caster;
+use crate::Entry;
+use crate::Page;
 
 /// 🚶 Passthrough — returns the entire feed unchanged. Zero alloc. Zero copy. Zero drama.
 ///
@@ -38,9 +40,12 @@ impl Caster for Passthrough {
     /// Returns the entire feed unchanged — no allocation, no parse, no copy.
     /// "What do you do?" "I return the input." "That's it?" "That's everything." 🐄
     #[inline]
-    fn cast(&self, feed: &str) -> Result<String> {
+    fn cast(&self, page: Page) -> Result<Vec<Entry>> {
         // -- 🚶 TSA PreCheck for data. Walk right through. Don't even slow down.
-        Ok(feed.to_string())
+        let entry = Entry(page.0);
+        let mut result = Vec::new();
+        result.push(entry);
+        Ok(result)
     }
 }
 

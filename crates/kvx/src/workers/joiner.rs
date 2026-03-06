@@ -25,6 +25,7 @@
 //!
 //! ⚠️ The singularity will parse JSON in constant time. Until then, we have threads.
 
+use crate::{Page, Payload};
 use crate::casts::{Caster, DocumentCaster};
 use crate::manifolds::{Manifold, ManifoldBackend};
 use crate::regulators::pressure_gauge::FlowKnob;
@@ -58,10 +59,10 @@ const BUFFER_EPSILON_BYTES: usize = 64 * 1024;
 pub struct Joiner {
     /// 📥 ch1 receiver — raw feeds from the pumper, delivered fresh like morning newspapers
     /// except the news is JSON and the paperboy is async_channel
-    rx: Receiver<String>,
+    rx: Receiver<Page>,
     /// 📤 ch2 sender — assembled payloads dispatched to drainers like care packages
     /// to the I/O frontlines
-    tx: Sender<String>,
+    tx: Sender<Payload>,
     /// 🔄 Per-feed format conversion — NdJsonToBulk, Passthrough, etc.
     /// Cloned per-joiner but zero-sized, so cloning costs less than this comment 🐄
     caster: DocumentCaster,
@@ -81,8 +82,8 @@ impl Joiner {
     /// "Give a joiner a feed, it processes for a millisecond.
     ///  Give a joiner a channel, it processes until the pumper dies." — Ancient proverb 🧵
     pub fn new(
-        rx: Receiver<String>,
-        tx: Sender<String>,
+        rx: Receiver<Page>,
+        tx: Sender<Payload>,
         caster: DocumentCaster,
         manifold: ManifoldBackend,
         the_throttle_knob: FlowKnob,
@@ -115,7 +116,7 @@ impl Joiner {
 
             loop {
                 match self.rx.recv_blocking() {
-                    Ok(feed) => {
+                    Ok(Page(feed)) => {
                         debug!("📄 Joiner received {} byte feed from ch1", feed.len());
 
                         // 📏 Accumulate feed into buffer, track bytes like a metered taxi 🚕
@@ -187,7 +188,7 @@ fn flush_and_forward(
     buffer_bytes: &mut usize,
     manifold: &ManifoldBackend,
     caster: &DocumentCaster,
-    tx: &Sender<String>,
+    tx: &Sender<Payload>,
 ) -> Result<()> {
     // 🎼 Cast each feed + assemble wire-format payload via manifold
     let the_assembled_payload = manifold.join(buffer, caster).context(
@@ -198,7 +199,7 @@ fn flush_and_forward(
 
     // 📡 Send assembled payload to ch2 for drainers, unless it's empty/trivial
     if !the_assembled_payload.is_empty() && the_assembled_payload != "[]" {
-        tx.send_blocking(the_assembled_payload).context(
+        tx.send_blocking(Payload::from(the_assembled_payload)).context(
             "💀 Joiner failed to send payload to ch2 — the channel rejected our offering. \
              Like sliding a note under the door and hearing it slide back. \
              ch2 may be closed or full. Either way, the vibes are off.",
@@ -232,8 +233,8 @@ mod tests {
     /// and the bottle is a String. 🦆
     #[test]
     fn the_one_where_a_feed_survives_the_joiner_thread() {
-        let (tx1, rx1) = async_channel::bounded::<String>(10);
-        let (tx2, rx2) = async_channel::bounded::<String>(10);
+        let (tx1, rx1) = async_channel::bounded::<Page>(10);
+        let (tx2, rx2) = async_channel::bounded::<Payload>(10);
 
         let joiner = Joiner::new(
             rx1,
@@ -248,12 +249,12 @@ mod tests {
         let the_joiner_thread = joiner.start();
 
         // 📤 Send one feed, then close ch1 to trigger final flush
-        tx1.send_blocking(r#"{"doc":1}"#.to_string()).unwrap();
+        tx1.send_blocking(Page(r#"{"doc":1}"#.to_string())).unwrap();
         tx1.close();
 
         // 📥 The joiner should have flushed and sent a JSON array payload to ch2
         let the_payload = rx2.recv_blocking().unwrap();
-        assert_eq!(the_payload, r#"[{"doc":1}]"#, "🎯 Joiner should produce a JSON array wrapping the feed");
+        assert_eq!(*the_payload, r#"[{"doc":1}]"#, "🎯 Joiner should produce a JSON array wrapping the feed");
 
         // 🧵 Thread should exit cleanly after ch1 closes
         the_joiner_thread
@@ -267,8 +268,8 @@ mod tests {
     /// like a lazy postman. 📬
     #[test]
     fn the_one_where_multiple_feeds_become_one_payload() {
-        let (tx1, rx1) = async_channel::bounded::<String>(10);
-        let (tx2, rx2) = async_channel::bounded::<String>(10);
+        let (tx1, rx1) = async_channel::bounded::<Page>(10);
+        let (tx2, rx2) = async_channel::bounded::<Payload>(10);
 
         let joiner = Joiner::new(
             rx1,
@@ -281,9 +282,9 @@ mod tests {
         let the_joiner_thread = joiner.start();
 
         // 📤 Send three feeds, close ch1
-        tx1.send_blocking(r#"{"doc":1}"#.to_string()).unwrap();
-        tx1.send_blocking(r#"{"doc":2}"#.to_string()).unwrap();
-        tx1.send_blocking(r#"{"doc":3}"#.to_string()).unwrap();
+        tx1.send_blocking(Page(r#"{"doc":1}"#.to_string())).unwrap();
+        tx1.send_blocking(Page(r#"{"doc":2}"#.to_string())).unwrap();
+        tx1.send_blocking(Page(r#"{"doc":3}"#.to_string())).unwrap();
         tx1.close();
 
         // 📥 All three should arrive as one JSON array payload
@@ -301,8 +302,8 @@ mod tests {
     /// Like a toilet with a sensitive flush sensor. Crude but accurate. 🚽🦆
     #[test]
     fn the_one_where_buffer_flushes_before_channel_closes() {
-        let (tx1, rx1) = async_channel::bounded::<String>(10);
-        let (tx2, rx2) = async_channel::bounded::<String>(10);
+        let (tx1, rx1) = async_channel::bounded::<Page>(10);
+        let (tx2, rx2) = async_channel::bounded::<Payload>(10);
 
         // 📏 Set max_request_size_bytes so small that even one feed triggers a flush
         // BUFFER_EPSILON_BYTES is 64 KiB, so anything above that + feed size triggers
@@ -319,16 +320,16 @@ mod tests {
         let the_joiner_thread = joiner.start();
 
         // 📤 Send two feeds — each should flush independently due to tiny max
-        tx1.send_blocking(r#"{"doc":"first"}"#.to_string()).unwrap();
-        tx1.send_blocking(r#"{"doc":"second"}"#.to_string()).unwrap();
+        tx1.send_blocking(Page(r#"{"doc":"first"}"#.to_string())).unwrap();
+        tx1.send_blocking(Page(r#"{"doc":"second"}"#.to_string())).unwrap();
         tx1.close();
 
         // 📥 Should get two separate payloads (one per flush)
         let payload_one = rx2.recv_blocking().unwrap();
         let payload_two = rx2.recv_blocking().unwrap();
 
-        assert_eq!(payload_one, r#"[{"doc":"first"}]"#, "🎯 First feed should flush on its own");
-        assert_eq!(payload_two, r#"[{"doc":"second"}]"#, "🎯 Second feed should flush on its own");
+        assert_eq!(*payload_one, r#"[{"doc":"first"}]"#, "🎯 First feed should flush on its own");
+        assert_eq!(*payload_two, r#"[{"doc":"second"}]"#, "🎯 Second feed should flush on its own");
 
         the_joiner_thread.join().unwrap().unwrap();
     }
@@ -337,8 +338,8 @@ mod tests {
     /// The joiner receives nothing. It sends nothing. It is at peace. 🧘
     #[test]
     fn the_one_where_no_feeds_means_no_payloads() {
-        let (tx1, rx1) = async_channel::bounded::<String>(10);
-        let (tx2, rx2) = async_channel::bounded::<String>(10);
+        let (tx1, rx1) = async_channel::bounded::<Page>(10);
+        let (tx2, rx2) = async_channel::bounded::<Payload>(10);
 
         let joiner = Joiner::new(
             rx1,
@@ -367,8 +368,8 @@ mod tests {
     /// while you're cooking — the kitchen gets colder. 🌡️🦆
     #[test]
     fn the_one_where_the_flow_knob_changes_mid_flight() {
-        let (tx1, rx1) = async_channel::bounded::<String>(10);
-        let (tx2, rx2) = async_channel::bounded::<String>(10);
+        let (tx1, rx1) = async_channel::bounded::<Page>(10);
+        let (tx2, rx2) = async_channel::bounded::<Payload>(10);
 
         // 📏 Start with a huge knob — nothing flushes until channel close
         let the_shared_knob = knob(usize::MAX);
@@ -385,19 +386,19 @@ mod tests {
         let the_joiner_thread = joiner.start();
 
         // 📤 Send first feed — won't flush yet (knob is huge)
-        tx1.send_blocking(r#"{"doc":"before"}"#.to_string()).unwrap();
+        tx1.send_blocking(Page(r#"{"doc":"before"}"#.to_string())).unwrap();
 
         // 🔧 Now crank the knob down so small that the NEXT feed triggers a flush
         the_knob_clone.store(BUFFER_EPSILON_BYTES + 5, Ordering::Relaxed);
 
         // 📤 Send second feed — should trigger flush due to lowered knob
-        tx1.send_blocking(r#"{"doc":"after"}"#.to_string()).unwrap();
+        tx1.send_blocking(Page(r#"{"doc":"after"}"#.to_string())).unwrap();
 
         // 📥 First payload should arrive (both feeds flushed together when threshold hit)
         let the_first_payload = rx2.recv_blocking().unwrap();
         assert!(
-            the_first_payload.contains("before"),
-            "🎯 First payload should contain the pre-knob-change feed — got {}",
+            (*the_first_payload).contains("before"),
+            "🎯 First payload should contain the pre-knob-change feed — got {:?}",
             the_first_payload
         );
 

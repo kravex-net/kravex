@@ -37,13 +37,7 @@ Kravex automatically optimizes search migrations — no knobs, no guesswork. Sma
 - **Debug kvx-cli** (`F5`) — LLDB debugger attached
 - **Run kvx-cli (no debug)** (`Ctrl+F5`)
 
-# Notes for future reference
+# Notes
 
 - POC/MVP stage — API surface is unstable
 - Keep dependency footprint minimal
-- Runtime tuning lives under `[runtime]` in `kvx.toml`; backend-specific knobs stay under `source_config` / `sink_config`
-
-# Aggregated Context Memory Across Sessions for Current and Future Use
-
-- Initial scaffold: workspace with two crates, placeholder implementations
-- `.vscode/` configured with build tasks and LLDB launch configs for `kvx-cli`

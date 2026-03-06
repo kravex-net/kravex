@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
+use crate::Page;
 use crate::backends::Source;
 
 /// 📦 The world's most optimistic data source — now feed-aware! 📄
@@ -52,7 +53,7 @@ impl Source for InMemorySource {
     /// 🧠 Knowledge graph: the source joins its 4 docs with `\n` into one raw feed.
     /// The Manifold+Caster downstream will split and process them.
     /// Source is ignorant. Source is bliss. Source is a faucet. 🚰
-    async fn next_page(&mut self) -> Result<Option<String>> {
+    async fn next_page(&mut self) -> Result<Option<Page>> {
         if self.has_yielded {
             return Ok(None);
         }
@@ -70,6 +71,6 @@ impl Source for InMemorySource {
         ]
         .join("\n");
 
-        Ok(Some(the_sacred_page))
+        Ok(Some(Page(the_sacred_page)))
     }
 }

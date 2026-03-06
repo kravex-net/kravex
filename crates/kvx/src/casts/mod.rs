@@ -24,9 +24,10 @@ pub mod pit_to_bulk;
 use ndjson_to_bulk::NdJsonToBulk;
 use pit_to_bulk::PitToBulk;
 
-use crate::app_config::{SourceConfig, SinkConfig};
+use crate::config::{SourceConfig, SinkConfig};
 use anyhow::Result;
-
+use crate::Page;
+use crate::Entry;
 
 // ===== Trait =====
 
@@ -37,7 +38,7 @@ use anyhow::Result;
 pub trait Caster: std::fmt::Debug {
     /// 🔄 Cast a raw source feed into sink-format output.
     /// The feed goes in raw. It comes out ready. Like a pottery kiln, but for JSON. 🏺
-    fn cast(&self, feed: &str) -> Result<String>;
+    fn cast(&self, page: Page) -> Result<Vec<Entry>>;
 }
 
 // ===== Enum Dispatcher =====

@@ -18,6 +18,7 @@
 
 use super::Worker;
 use crate::backends::{Source, SourceBackend};
+use crate::Page;
 use anyhow::{Context, Result};
 use async_channel::Sender;
 use tokio::task::JoinHandle;
@@ -30,7 +31,7 @@ use tracing::debug;
 /// Like a barista, but for data. And less tips. And the drinks are just raw bytes.
 #[derive(Debug)]
 pub struct Pumper {
-    tx: Sender<String>,
+    tx: Sender<Page>,
     source: SourceBackend,
 }
 
@@ -40,7 +41,7 @@ impl Pumper {
     /// Give it a sender (where the raw feeds go) and a source backend (where the data comes from).
     /// It will faithfully poll `pump()` like a golden retriever waiting by the door.
     /// `None` = the retriever goes home. The channel closes. 🐕
-    pub fn new(tx: Sender<String>, source: SourceBackend) -> Self {
+    pub fn new(tx: Sender<Page>, source: SourceBackend) -> Self {
         Self { tx, source }
     }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ai
+
 """
 🔧 Kravex Shared Utilities — kvx_utils.py 🔧🚀📦
 It was 3am. The demo scripts and benchmark scripts both needed index ops.

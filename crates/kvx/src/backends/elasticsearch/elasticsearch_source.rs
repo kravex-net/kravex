@@ -1,37 +1,10 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use serde::Deserialize;
 
+use crate::Page;
 use crate::backends::Source;
 use crate::progress::ProgressMetrics;
-use crate::backends::CommonSourceConfig;
-
-// Moved here from supervisors/config.rs because configs should live near the thing they configure.
-//
-// 🔧 auth is tri-modal: username+password, api_key, or "I hope anonymous works" (it won't).
-// The `common_config` field carries the boring but important stuff: batch sizes, timeouts, etc.
-#[derive(Debug, Deserialize, Clone)]
-pub struct ElasticsearchSourceConfig {
-    /// 📡 The URL of your Elasticsearch cluster. Include scheme + port. Yes, all of it.
-    /// No, `localhost` alone is not enough. Yes, I know it worked in dev. Yes, I know.
-    pub url: String,
-    /// 🔒 Username for basic auth. Optional, like flossing. You know you should have one.
-    #[serde(default)]
-    pub username: Option<String>,
-    /// 🔒 Password. If this is in plaintext in your config file, I've already filed a complaint
-    /// with the Department of Security Choices.
-    #[serde(default)]
-    pub password: Option<String>,
-    /// 🔒 API key auth — the fancy way. Preferred over basic auth. Like using a card instead of
-    /// cash. Or a key fob instead of a key. Or a retinal scanner instead of a key fob.
-    /// Point is: hierarchy. This field respects hierarchy.
-    #[serde(default)]
-    pub api_key: Option<String>,
-    /// 📦 Common source settings — the bureaucratic paperwork of data migration.
-    /// Max batch size, timeouts, etc. Not glamorous. Essential. Like the appendix.
-    #[serde(default)]
-    pub common_config: CommonSourceConfig,
-}
+use super::config::ElasticsearchSourceConfig;
 
 /// 📦 The source side of the Elasticsearch backend.
 ///
@@ -72,7 +45,7 @@ impl Source for ElasticsearchSource {
     /// It's aspirational. It's a placeholder with excellent posture.
     /// The borrow checker is fully satisfied. The product manager is not.
     /// "He who stubs with None, deploys with hope." — Ancient scroll API proverb 📜
-    async fn next_page(&mut self) -> Result<Option<String>> {
+    async fn next_page(&mut self) -> Result<Option<Page>> {
         // TODO: Implement search_after — the glow-up we deserve. 🚀
         // ✅ Finish the progress bar so the process exits cleanly — no lingering indicatif threads 🧹
         self.progress.finish();

@@ -11,7 +11,7 @@ use crate::regulators::RegulatorConfig;
 use serde::Deserialize;
 // -- 🔧 To load the configuration, so I don't have to manually parse
 // -- environment variables or files. Bleh. Like doing taxes but for bytes.
-use crate::backends::{CommonSinkConfig, ElasticsearchSinkConfig, ElasticsearchSourceConfig, FileSinkConfig, FileSourceConfig};
+pub use crate::backends::{SinkConfig, SourceConfig};
 use figment::{
     Figment,
     providers::{Env, Format, Toml},
@@ -96,66 +96,6 @@ fn default_joiner_parallelism() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get().saturating_sub(1).max(1))
         .unwrap_or(1)
-}
-
-// ============================================================
-// 🎭 SourceConfig / SinkConfig — the velvet rope at the backend club
-// ============================================================
-
-/// 🎭 SourceConfig: the velvet rope at the backend club.
-/// You are either a File, an Elasticsearch, or an InMemory.
-/// There is no Other. There is no Unsupported. There is only the enum.
-/// (Until someone files a feature request. There is always a feature request.)
-///
-/// 🧠 Knowledge graph: moved from `supervisors/config.rs` to here — this is application-level
-/// config that the supervisor *uses* but doesn't *own*. The lib entrypoint resolves this into
-/// a `SourceBackend` for the worker pipeline. 🚰
-#[derive(Debug, Deserialize, Clone)]
-pub enum SourceConfig {
-    /// 📡 Read from an Elasticsearch index via scroll API
-    Elasticsearch(ElasticsearchSourceConfig),
-    /// 📂 Read from a local file (NDJSON or Rally JSON array)
-    File(FileSourceConfig),
-    /// 🧪 In-memory test source — 4 hardcoded docs, no I/O, no regrets
-    InMemory(()),
-}
-
-/// 🗑️ SinkConfig: same vibe as SourceConfig but for the *receiving* end.
-/// Data goes IN. Data does not come back out. It is not a revolving door.
-/// It is a black hole of bytes, and we are at peace with that.
-/// The InMemory(()) variant holds `()` which is the Rust way of saying "we have nothing to say here."
-///
-/// 🧠 Knowledge graph: moved from `supervisors/config.rs` to `app_config` — same rationale as
-/// SourceConfig. Resolved at startup into a `SinkBackend` by `lib.rs`. The Drainer
-/// reads `max_request_size_bytes()` to know when to flush its feed buffer. 🚰
-#[derive(Debug, Deserialize, Clone)]
-pub enum SinkConfig {
-    /// 📡 Write to an Elasticsearch index via bulk API
-    Elasticsearch(ElasticsearchSinkConfig),
-    /// 📂 Write to a local file (NDJSON)
-    File(FileSinkConfig),
-    /// 🧪 In-memory test sink — captures payloads for assertion, no I/O
-    InMemory(()),
-}
-
-impl SinkConfig {
-    /// 📏 Extract `max_request_size_bytes` from whichever sink config variant we are.
-    ///
-    /// Each backend sink config embeds a `CommonSinkConfig` with this field.
-    /// InMemory has no config struct, so it gets the `CommonSinkConfig::default()` value.
-    /// "He who queries the config, avoids the match in the hot path." — Ancient proverb 📜
-    ///
-    /// 🧠 Knowledge graph: Drainer uses this to know when to flush its feed buffer.
-    /// The buffer accumulates raw feeds until their total byte size approaches this limit,
-    /// then the Manifold casts+joins them into a single payload for the sink.
-    pub fn max_request_size_bytes(&self) -> usize {
-        match self {
-            SinkConfig::Elasticsearch(es) => es.common_config.max_request_size_bytes,
-            SinkConfig::File(f) => f.common_config.max_request_size_bytes,
-            // 🧠 InMemory gets the default — it's testing, we don't limit 🦆
-            SinkConfig::InMemory(_) => CommonSinkConfig::default().max_request_size_bytes,
-        }
-    }
 }
 
 /// 📦 The AppConfig: one struct to rule them all, one struct to find them,

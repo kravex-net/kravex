@@ -8,7 +8,7 @@
 
 // -- 🗑️ TODO: clean up the dedz (dead code, not the grateful kind)
 #![allow(dead_code, unused_variables, unused_imports)]
-pub mod app_config;
+pub mod config;
 pub mod backends;
 pub mod manifolds;
 pub mod progress;
@@ -17,21 +17,23 @@ pub mod casts;
 pub mod regulators;
 pub mod workers;
 
-use crate::app_config::AppConfig;
+use crate::config::AppConfig;
 use crate::backends::elasticsearch::{ElasticsearchSink, ElasticsearchSource};
 use crate::backends::file::{FileSink, FileSource};
 use crate::backends::in_mem::{InMemorySink, InMemorySource};
 use crate::backends::{SinkBackend, SourceBackend};
 use crate::foreman::Foreman;
-use crate::app_config::{RuntimeConfig, SinkConfig, SourceConfig};
+use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
 use crate::manifolds::ManifoldBackend;
 use crate::casts::DocumentCaster;
 use crate::regulators::pressure_gauge::{FlowKnob, SinkAuth, spawn_pressure_gauge};
 use anyhow::{Context, Result};
+use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::SystemTime;
 use tracing::info;
+
 
 /// 🚀 The grand entry point. The big kahuna. The main event.
 pub async fn run(app_config: AppConfig) -> Result<()> {
@@ -213,10 +215,73 @@ pub async fn stop() -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, PartialEq)]
+pub struct Page(pub String);
+
+impl Deref for Page {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<String> for Page {
+    fn from(s: String) -> Self {
+        Page(s)
+    }
+}
+
+/// 📦 A fully assembled, wire-ready payload — the final form before I/O.
+#[derive(Debug, PartialEq)]
+pub struct Payload(pub String);
+
+impl Deref for Payload {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<String> for Payload {
+    fn from(s: String) -> Self {
+        Payload(s)
+    }
+}
+
+impl PartialEq<&str> for Payload {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+pub struct Entry(pub String);
+impl Deref for Entry {
+    type Target = String;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<String> for Entry {
+    fn from(s: String) -> Self {
+        Entry(s)
+    }
+}
+
+impl PartialEq<&str> for Entry {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == *other
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_config::{RuntimeConfig, SinkConfig, SourceConfig};
+    use crate::config::{RuntimeConfig, SinkConfig, SourceConfig};
 
     /// 🧪 Full pipeline integration: InMemory→Passthrough→InMemory.
     /// Four raw docs in (as one newline-delimited feed), one JSON array payload out.

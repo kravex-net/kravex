@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
+use crate::Payload;
 use crate::backends::{elasticsearch, file, in_mem};
 
 /// 🕳️ A sink that sends pre-rendered payloads — pure I/O, zero logic.
@@ -25,7 +26,7 @@ use crate::backends::{elasticsearch, file, in_mem};
 #[async_trait]
 pub trait Sink: std::fmt::Debug {
     /// 📡 Send a fully rendered payload to the destination. I/O only. No questions asked.
-    async fn send(&mut self, payload: String) -> Result<()>;
+    async fn send(&mut self, payload: Payload) -> Result<()>;
     /// 🗑️ Flush, finalize, and release. Call this. Always. No exceptions. Not even on Fridays.
     async fn close(&mut self) -> Result<()>;
 }
@@ -47,7 +48,7 @@ pub enum SinkBackend {
 
 #[async_trait]
 impl Sink for SinkBackend {
-    async fn send(&mut self, payload: String) -> Result<()> {
+    async fn send(&mut self, payload: Payload) -> Result<()> {
         match self {
             SinkBackend::InMemory(sink) => sink.send(payload).await,
             SinkBackend::File(sink) => sink.send(payload).await,

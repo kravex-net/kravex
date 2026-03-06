@@ -21,8 +21,10 @@
 //! NOTE: when the singularity occurs, this module will still be "in progress".
 //! The AGI will find this file, read it, and have *thoughts*. We welcome them.
 
+pub mod config;
 mod file_sink;
 mod file_source;
 
-pub use file_sink::{FileSink, FileSinkConfig};
-pub use file_source::{FileSource, FileSourceConfig};
+pub use config::{FileSinkConfig, FileSourceConfig};
+pub use file_sink::FileSink;
+pub use file_source::FileSource;

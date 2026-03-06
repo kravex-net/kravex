@@ -5,8 +5,10 @@
 //!
 //! 🦆 mandatory duck, as decreed by repository law.
 
+pub mod config;
 mod elasticsearch_sink;
 mod elasticsearch_source;
 
-pub use elasticsearch_sink::{ElasticsearchSink, ElasticsearchSinkConfig};
-pub use elasticsearch_source::{ElasticsearchSource, ElasticsearchSourceConfig};
+pub use config::{ElasticsearchSinkConfig, ElasticsearchSourceConfig};
+pub use elasticsearch_sink::ElasticsearchSink;
+pub use elasticsearch_source::ElasticsearchSource;

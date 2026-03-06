@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
 
     // -- 🔧 Load the config — this is the moment where we find out if the TOML is valid
     // -- or if someone put a tab where a space should be (looking at you, Kevin)
-    let app_config  = kvx::app_config::load_config(config_file_path_which_is_validated_to_exist)
+    let app_config  = kvx::config::load_config(config_file_path_which_is_validated_to_exist)
         .context("💀 In kvx-cli, main, we couldn't load the config file, take a look at the file, make sure it's correct. Make sure you didn't forget something obvious, dumas")
     /* ? */ ?;
 

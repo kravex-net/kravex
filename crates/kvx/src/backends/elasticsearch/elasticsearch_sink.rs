@@ -2,36 +2,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use serde::Deserialize;
 use tracing::{debug, trace};
 
+use crate::Payload;
 use crate::backends::Sink;
-use crate::backends::CommonSinkConfig;
-
-//
-// ⚠️ Per-doc index routing: each Hit can carry its own `_index` field, which overrides this config.
-// This means a single sink can write to multiple indices if your source data is spicy enough.
-#[derive(Debug, Deserialize, Clone)]
-pub struct ElasticsearchSinkConfig {
-    /// 📡 Where to send the bodies. Uh. The documents. Where to send the documents.
-    pub url: String,
-    /// 🔒 Username. The bouncer at the club. Except the club is a database.
-    #[serde(default)]
-    pub username: Option<String>,
-    /// 🔒 Password. "password123" is not a password. It is a confession.
-    #[serde(default)]
-    pub password: Option<String>,
-    /// 🔒 API key — the velvet rope variant of authentication.
-    #[serde(default)]
-    pub api_key: Option<String>,
-    /// 📦 The default target index. Optional because each document can carry its own `_index`.
-    /// If both are None, `transform_into_bulk` will bail with an existential error message.
-    /// You've been warned. The existential error message is very existential.
-    pub index: Option<String>,
-    /// 🔧 Common sink config: max batch size in bytes, and other life decisions.
-    #[serde(flatten, default)]
-    pub common_config: CommonSinkConfig,
-}
+use super::config::ElasticsearchSinkConfig;
 
 /// 📡 The sink side of the Elasticsearch backend — pure I/O, zero buffering.
 ///
@@ -63,7 +38,7 @@ impl Sink for ElasticsearchSink {
     /// The Drainer upstream already cast each doc and binary-collected them into
     /// a single NDJSON payload string. We just fire it into the elastic void.
     /// "In a world where sinks had too many responsibilities... one refactor dared to simplify."
-    async fn send(&mut self, payload: String) -> Result<()> {
+    async fn send(&mut self, payload: Payload) -> Result<()> {
         debug!(
             "📡 Sending {} bytes to /_bulk — the payload has left the building, Elvis-style",
             payload.len()
@@ -180,7 +155,7 @@ impl ElasticsearchSink {
     /// If the response is not 2xx, we bail with enough detail to file a reasonable postmortem.
     ///
     /// 🔄 This function does not retry. Retries are the caller's problem. Good luck.
-    async fn submit_bulk_request(&self, request_body: String) -> Result<()> {
+    async fn submit_bulk_request(&self, request_body: Payload) -> Result<()> {
         // -- 📡 Build the bulk endpoint URL. The `_bulk` API: Elasticsearch's loading dock.
         // -- NDJSON only — no JSON arrays, no XML, no CSV, no hand-coded tab-separated values.
         // -- NDJSON. The only format Elasticsearch respects. Truly the format of people who
@@ -206,7 +181,7 @@ impl ElasticsearchSink {
         }
 
         let response = request
-            .body(request_body)
+            .body(request_body.0)
             .send()
             .await
             // -- 💀 "Failed to send bulk request" — micro-fiction, act one.
@@ -250,7 +225,8 @@ impl ElasticsearchSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backends::Sink;
+    use crate::Payload;
+    use crate::backends::{CommonSinkConfig, Sink};
     use wiremock::matchers::{body_string, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -556,7 +532,7 @@ mod tests {
         let mut the_eager_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — fire the payload into the elastic void
-        let the_ndjson = "{\"index\":{}}\n{\"id\":1}\n".to_string();
+        let the_ndjson = Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string());
         let the_result = the_eager_sink.send(the_ndjson).await;
 
         // 🎯 Assert — the void accepted our offering ✅
@@ -588,7 +564,7 @@ mod tests {
         let mut the_judged_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — submit docs that ES will roast
-        let the_rejected_payload = "{\"index\":{}}\n{\"bad\":\"doc\"}\n".to_string();
+        let the_rejected_payload = Payload::from("{\"index\":{}}\n{\"bad\":\"doc\"}\n".to_string());
         let the_harsh_verdict = the_judged_sink.send(the_rejected_payload).await;
 
         // 🎯 Assert — should fail, error chain should contain status info
@@ -625,7 +601,7 @@ mod tests {
         let mut the_unlucky_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        let the_500_result = the_unlucky_sink.send("{\"index\":{}}\n{\"id\":1}\n".to_string()).await;
+        let the_500_result = the_unlucky_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await;
 
         // 🎯 Assert — 500 is not 200. Math checks out.
         assert!(
@@ -655,7 +631,7 @@ mod tests {
         let mut the_proper_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_proper_sink.send("{\"index\":{}}\n{\"id\":1}\n".to_string()).await?;
+        the_proper_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock's header matcher confirms Content-Type ✅
 
@@ -683,7 +659,7 @@ mod tests {
         let mut the_vip_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_vip_sink.send("{\"index\":{}}\n{\"id\":1}\n".to_string()).await?;
+        the_vip_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock confirms ApiKey header was sent ✅
 
@@ -719,7 +695,7 @@ mod tests {
         let mut the_basic_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_basic_sink.send("{\"index\":{}}\n{\"id\":1}\n".to_string()).await?;
+        the_basic_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock confirms Basic auth was sent ✅
 
@@ -746,7 +722,7 @@ mod tests {
         let mut the_naked_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_naked_sink.send("{\"index\":{}}\n{\"id\":1}\n".to_string()).await?;
+        the_naked_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — request was received. No auth configured = no auth sent. ✅
 
@@ -777,7 +753,7 @@ mod tests {
         let mut the_decisive_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_decisive_sink.send("{\"index\":{}}\n{\"id\":1}\n".to_string()).await?;
+        the_decisive_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock confirms ApiKey won the auth battle ✅
 
@@ -806,7 +782,7 @@ mod tests {
         let mut the_faithful_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_faithful_sink.send(the_sacred_payload.to_string()).await?;
+        the_faithful_sink.send(Payload::from(the_sacred_payload.to_string())).await?;
 
         // 🎯 Assert — wiremock's body_string matcher confirms byte-perfect delivery ✅
 
@@ -865,7 +841,7 @@ mod tests {
         let mut the_slash_aware_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act
-        the_slash_aware_sink.send("{\"index\":{}}\n{\"id\":1}\n".to_string()).await?;
+        the_slash_aware_sink.send(Payload::from("{\"index\":{}}\n{\"id\":1}\n".to_string())).await?;
 
         // 🎯 Assert — wiremock's path("/_bulk") + expect(1) confirms correct URL ✅
 
@@ -889,7 +865,7 @@ mod tests {
         let mut the_yolo_sink = ElasticsearchSink::new(config).await?;
 
         // 🚀 Act — send absolutely nothing
-        let the_existential_result = the_yolo_sink.send(String::new()).await;
+        let the_existential_result = the_yolo_sink.send(Payload::from(String::new())).await;
 
         // 🎯 Assert — the sink sent it, ES accepted it. Not our circus, not our monkeys.
         assert!(

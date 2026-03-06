@@ -1,4 +1,4 @@
-# ai
+
 
 # Summary
 Shared Python utilities for Kravex demo and benchmark scripts.
@@ -26,8 +26,3 @@ The Switzerland of the Kravex repo. Common functions extracted from `demo/script
 - Import pattern: `sys.path.insert(0, str(REPO_ROOT))` then `from shared.kvx_utils import ...`
 - `_guess_project_root()` walks up from `shared/` to find `Cargo.toml`
 - `MetricsSampler` uses daemon threads — no zombie cleanup needed
-
-# Aggregated Context Memory Across Sessions for Current and Future Use
-- Created 2026-03-03 during demo+benchmark infrastructure consolidation
-- Extracted from: `demo/scripts/seed.py` (index ops), `demo/scripts/migrate.py` (binary finder), `benchmark/scripts/helpers/*.sh` (metrics, index ops)
-- Eliminated: 7 bash scripts, 1 docker-compose, duplicated index ops code

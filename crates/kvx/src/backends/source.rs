@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 
+use crate::Page;
 use crate::backends::{elasticsearch, file, in_mem};
 
 /// 🚰 A source that produces one raw feed per call — maximally ignorant of content format.
@@ -27,7 +28,7 @@ pub trait Source: std::fmt::Debug {
     /// Returns `Ok(Some(feed))` while data flows — one feed per call, content uninterpreted.
     /// Returns `Ok(None)` when the tap runs dry. EOF. Fin. The end. 🏁
     /// Returns `Err(...)` when something has gone sideways, sidelong, or fully upside-down.
-    async fn next_page(&mut self) -> Result<Option<String>>;
+    async fn next_page(&mut self) -> Result<Option<Page>>;
 }
 
 /// 🎭 The many faces of a Source — a polymorphic casting call for data origins.
@@ -47,7 +48,7 @@ pub enum SourceBackend {
 
 #[async_trait]
 impl Source for SourceBackend {
-    async fn next_page(&mut self) -> Result<Option<String>> {
+    async fn next_page(&mut self) -> Result<Option<Page>> {
         match self {
             SourceBackend::InMemory(i) => i.next_page().await,
             SourceBackend::File(f) => f.next_page().await,

@@ -18,13 +18,7 @@ CLI interface for kravex — run migrations from the command line.
 - Thin CLI layer over `kvx` core
 - Will surface throttle/cutover/progress to the terminal
 
-# Notes for future reference
+# Notes
 
-- POC/MVP stage — currently a placeholder `main.rs`
-- CLI argument parsing library not yet chosen
+- POC/MVP stage
 - VS Code launch configs (`F5` / `Ctrl+F5`) target this binary via CodeLLDB
-
-# Aggregated Context Memory Across Sessions for Current and Future Use
-
-- Initial scaffold: "Hello, world!" placeholder in `main.rs`
-- `.vscode/launch.json` debug/run configurations point to this crate

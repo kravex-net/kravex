@@ -22,7 +22,7 @@
 //! 💀 WORKERS ARE THE FOREMAN'S PRIVATE LITTLE MINIONS WHOM THE WORLD FORGOT ABOUT
 //! 🔒 Like Fight Club, but for async tasks. First rule: you don't pub the workers.
 
-use crate::app_config::AppConfig;
+use crate::config::AppConfig;
 use crate::casts::DocumentCaster;
 use crate::manifolds::ManifoldBackend;
 use crate::regulators::pressure_gauge::FlowKnob;
@@ -91,7 +91,7 @@ impl Foreman {
 
         // 📬 ch2: joiners → drainers — carries assembled payload Strings, MPMC
         // The VIP lounge of the pipeline — only processed payloads allowed past this point 🎟️
-        let (tx2, rx2) = async_channel::bounded(self.app_config.runtime.joiner_to_drainer_capacity);
+        let (tx2, rx2) = async_channel::bounded::<crate::Payload>(self.app_config.runtime.joiner_to_drainer_capacity);
 
         info!(
             "🏗️ Foreman assembling pipeline: 1 pumper → {} joiners → {} drainers",

@@ -16,8 +16,8 @@
 //! - Resolution: from `SinkConfig`, same pattern as backends and casts.
 //!
 //! ```text
-//! Drainer pipeline:
-//!   channel(String) → buffer Vec<String> → manifold.join(&buffer, &caster) → sink.drain(payload)
+//! Joiner pipeline:
+//!   ch1(Feed) → buffer Vec<String> → manifold.join(&buffer, &caster) → ch2(Payload) → Drainer → sink.drain()
 //! ```
 //!
 //! 🦆 (the duck joins... symphonies? payloads? both? the duck has no comment.)

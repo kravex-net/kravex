@@ -20,6 +20,7 @@
 //! ⚠️ The singularity will drain data at the speed of light. We drain at the speed of HTTP.
 
 use super::Worker;
+use crate::Payload;
 use crate::backends::{Sink, SinkBackend};
 use anyhow::{Context, Result};
 use async_channel::Receiver;
@@ -40,7 +41,7 @@ use tracing::debug;
 #[derive(Debug)]
 pub struct Drainer {
     /// 📥 ch2 receiver — assembled payloads from the joiner thread pool
-    rx: Receiver<String>,
+    rx: Receiver<Payload>,
     /// 🚰 The final destination — where payloads go to live their best life (or die trying)
     sink: SinkBackend,
 }
@@ -50,7 +51,7 @@ impl Drainer {
     ///
     /// "Give a drainer a payload, it sends for a millisecond.
     ///  Give a drainer a channel, it sends until the joiners die." — Ancient proverb 🦆
-    pub fn new(rx: Receiver<String>, sink: SinkBackend) -> Self {
+    pub fn new(rx: Receiver<Payload>, sink: SinkBackend) -> Self {
         Self { rx, sink }
     }
 }

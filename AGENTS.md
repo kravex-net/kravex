@@ -20,22 +20,28 @@ You _MUST_ utilize tools in such a way that the tools usage results in the least
 
 # Rules:
 - If a `Cargo.toml` exists, a `README.md` MUST exist in the same directory
+- Every folder under /crates/kvx/src must have a `README.md`
+- Readme must be distilled documentation for a new user, anything unnecessary is removed. Anything which no longer exists in code must be removed.
+- Must explicitly use keywords, terminology, conceptual, with no implementation details.
 - You MUST proactively read, create, update, and delete README.md files and their contents
-- Contents MUST be concise, terse, compacted.
 - You must embed knowledge graph information into README.md updates.
 - You must update README.md files as you complete any given piece of work.
 - You must update README.md at least once for every 50,000 tokens.
 
-# README.md mandatory format:
-```
-# Summary
-# Description
-# Knowledge Graph
-# Key Concepts
-# Notes for future reference
-# Aggregated Context Memory Across Sessions for Current and Future Use
-```
+# Module Structure Convention
+Every directory under `/crates/kvx/src/` follows this pattern:
+- `mod.rs` — Module root. Re-exports public API, declares submodules. Every directory MUST have one.
+- `README.md` — Distilled documentation for the module (see README rules above).
+- `config.rs` — Serde-deserializable configuration struct(s) for the module. Required when the module has user-facing configuration (backends with external
+connections, regulators with tunable parameters). Omit for stateless/functional modules (casts, manifolds, workers).
 
+Nested backend directories (e.g., `backends/elasticsearch/`) follow the same pattern: `mod.rs` + `README.md` + `config.rs` (when applicable).
+## Module directory structure (required files, in this order of priority)
+  1) `mod.rs` — module root, re-exports, submodule declarations
+  2) `config.rs` — configuration structs (when module has user-facing config)
+  3) `README.md` — distilled documentation
+  4) Implementation files (e.g., `elasticsearch_sink.rs`, `pumper.rs`)
+   
 # Context Saving
 You are explicitly forbidden from loading these files:
 LICENSE
@@ -46,12 +52,6 @@ You are hesitant to load, operate upon these files and directories, unless you e
 *.Cargo.lock
 /target/*
 /.vscode/*
-
-If a file starts with // ai OR # ai
-This is a file which may be edited, modified, deleted, etc.
-
-If a file starts with // ai slop OR # ai slop
-This is a file which does meet my criteria for "good" and should be refactored, cleaned up, and not given any respect. 
 
 If a file is > 64 KiB, you _MUST_ utilize tools to find the relevant content, and you must not load the entire file into context.
 
@@ -111,6 +111,9 @@ User is obssessed with doing things the now "old school way" of by hand, with cr
   - Commit messages: leading emoji matching the change type
   - If a block of code has no emoji nearby, it is lonely and sad 😢
   - When in doubt, add 🚀 because everything is a launch
+## Comedy length rules
+  - Comedy must exist on a single comment line. It must not span multiple lines.
+
 
 # Style Guide
 ## Variable naming must be either:
@@ -126,9 +129,7 @@ User is obssessed with doing things the now "old school way" of by hand, with cr
   - Overly verbose
 ## Comments must be either:
   - Follow Comedy Laws and prefixed AS `// -- ` instead of `// `
-  - Informative non-humor comments must be either:
-    - You must embed knowledge graph information and details into comments.
-    - You must embed tribal knowledge into comments. It must explain a combination of rationale, reasoning, deduction, logic, and thinking process.
+  - Informative non-humor comments must be a combination of rationale, reasoning, deduction, logic, and thinking process. Do not mention anything which no longer exists.
 
 ## Commit Message Policy
   - Every commit message must contain at least one of:
@@ -177,6 +178,7 @@ User is obssessed with doing things the now "old school way" of by hand, with cr
 ## Emoji Policy 🎉
   - Emojis are MANDATORY, not optional
   - They serve dual purpose: joy AND function
+  
 
 ### Functional Emoji Guide
   - 🚀 = launch, start, init, entry point

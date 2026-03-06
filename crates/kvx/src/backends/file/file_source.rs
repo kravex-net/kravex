@@ -1,40 +1,16 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use memchr::memchr;
-use serde::Deserialize;
 use tokio::{
     fs::File,
     io::AsyncReadExt,
 };
 use tracing::trace;
 
-use crate::backends::{Sink, Source};
+use crate::Page;
+use crate::backends::{CommonSourceConfig, Source};
 use crate::progress::ProgressMetrics;
-use crate::backends::{CommonSinkConfig, CommonSourceConfig};
-
-// -- 📂 FileSourceConfig — "It's just a file", said no sysadmin ever before the disk filled up.
-// -- Lives here now, close to the FileSource that actually uses it. Ethos pattern, baby. 🎯
-// KNOWLEDGE GRAPH: config lives co-located with the backend that uses it. This is intentional.
-// It avoids the "where the heck is that config defined" scavenger hunt at 2am during an incident.
-// -- No cap, this pattern slaps fr fr.
-#[derive(Debug, Deserialize, Clone)]
-pub struct FileSourceConfig {
-    pub file_name: String,
-    #[serde(default = "default_file_common_source_config")]
-    pub common_config: CommonSourceConfig,
-}
-
-/// 🔧 Returns the default config for FileSource because sometimes you just want things to work
-/// without writing a 40-line TOML block.
-///
-/// Dad joke time: I used to hate default configs... but they grew on me.
-///
-/// This exists purely so serde can call it when `common_config` is absent from the TOML.
-/// The `#[serde(default = "...")]` attribute up top is the boss. This is just the errand boy.
-fn default_file_common_source_config() -> CommonSourceConfig {
-    // -- ✅ "It just works" — the three most dangerous words in software engineering
-    CommonSourceConfig::default()
-}
+use super::config::FileSourceConfig;
 // 📏 128 KiB per OS read — the Goldilocks zone between "too many syscalls" and "too much RAM".
 // BufReader's default is 8 KiB. We're 16x that. Fewer context switches, happier kernel.
 // KNOWLEDGE GRAPH: this constant controls the I/O batch size for raw file reads.
@@ -161,7 +137,7 @@ impl Source for FileSource {
     /// safe for any valid UTF-8 input. The final `String::from_utf8` validates the output.
     ///
     /// "He who reads the entire file into one String, OOMs in production." — Ancient proverb 📜
-    async fn next_page(&mut self) -> Result<Option<String>> {
+    async fn next_page(&mut self) -> Result<Option<Page>> {
         let max_docs = self.source_config.common_config.max_batch_size_docs;
         let max_bytes = self.source_config.common_config.max_batch_size_bytes;
 
@@ -283,7 +259,7 @@ impl Source for FileSource {
                 Like trying to fit a square peg in a round hole, \
                 except the peg is binary garbage and the hole is Unicode.",
             )?;
-            Ok(Some(feed_string))
+            Ok(Some(Page(feed_string)))
         }
     }
 }
@@ -334,7 +310,7 @@ mod tests {
     /// 🔄 Drains every page from the source until EOF.
     /// Returns all non-None pages in order. Like squeezing a tube of toothpaste
     /// until nothing comes out. 🦷
-    async fn drain_all_pages(source: &mut FileSource) -> Result<Vec<String>> {
+    async fn drain_all_pages(source: &mut FileSource) -> Result<Vec<Page>> {
         // -- 🦆 this function exists because copy-pasting while loops is a code smell
         let mut pages = Vec::new();
         while let Some(page) = source.next_page().await? {
@@ -352,7 +328,7 @@ mod tests {
         let page1 = source.next_page().await?;
         assert_eq!(
             page1,
-            Some("line1\nline2\nline3".to_string()),
+            Some(Page("line1\nline2\nline3".to_string())),
             "💀 Expected all three lines in one feed, got something else. The vibes are off."
         );
 
@@ -384,7 +360,7 @@ mod tests {
         );
 
         // -- ✅ verify total content integrity — no docs lost in the mail
-        let all_docs: String = pages.join("\n");
+        let all_docs: String = pages.iter().map(|f| f.as_str()).collect::<Vec<_>>().join("\n");
         let expected: String = (0..10).map(|i| format!("doc{i}")).collect::<Vec<_>>().join("\n");
         assert_eq!(all_docs, expected, "💀 Total content mismatch. Some docs went AWOL.");
         Ok(())
@@ -439,7 +415,7 @@ mod tests {
         let page = source.next_page().await?;
         assert_eq!(
             page,
-            Some("alpha\nbeta\ngamma".to_string()),
+            Some(Page("alpha\nbeta\ngamma".to_string())),
             "💀 Missing trailing newline should not eat the last doc. gamma deserves better."
         );
 
@@ -458,7 +434,7 @@ mod tests {
         let page = source.next_page().await?;
         assert_eq!(
             page,
-            Some("hello\nworld".to_string()),
+            Some(Page("hello\nworld".to_string())),
             "💀 \\r\\n should be stripped to \\n. Windows line endings are not welcome here."
         );
         Ok(())
@@ -474,7 +450,7 @@ mod tests {
         let page = source.next_page().await?;
         assert_eq!(
             page,
-            Some("a\nb\nc".to_string()),
+            Some(Page("a\nb\nc".to_string())),
             "💀 Empty lines should be ghosted. Only real docs make it to the feed."
         );
         Ok(())
@@ -494,7 +470,7 @@ mod tests {
         let pages = drain_all_pages(&mut source).await?;
 
         // -- 🎯 reconstruct full content from pages and compare to original
-        let reconstructed = pages.join("\n");
+        let reconstructed = pages.iter().map(|f| f.as_str()).collect::<Vec<_>>().join("\n");
         let expected = lines.join("\n");
         assert_eq!(
             reconstructed, expected,
