@@ -84,7 +84,7 @@ fn joiner_throughput_bytes(c: &mut Criterion) {
                             tx2,
                             DocumentCaster::Passthrough(Passthrough),
                             manifold.clone(),
-                            MAX_REQUEST_SIZE_BYTES,
+                            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(MAX_REQUEST_SIZE_BYTES)),
                         );
 
                         // -- 🚀 Launch the joiner thread — it blocks on recv_blocking until feeds arrive
@@ -146,7 +146,7 @@ fn joiner_throughput_docs(c: &mut Criterion) {
                             tx2,
                             DocumentCaster::Passthrough(Passthrough),
                             manifold.clone(),
-                            MAX_REQUEST_SIZE_BYTES,
+                            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(MAX_REQUEST_SIZE_BYTES)),
                         );
 
                         let the_joiner_handle = joiner.start();

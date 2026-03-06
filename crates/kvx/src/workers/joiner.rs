@@ -27,8 +27,10 @@
 
 use crate::casts::{Caster, DocumentCaster};
 use crate::manifolds::{Manifold, ManifoldBackend};
+use crate::regulators::pressure_gauge::FlowKnob;
 use anyhow::{Context, Result};
 use async_channel::{Receiver, Sender};
+use std::sync::atomic::Ordering;
 use tracing::debug;
 
 /// 🧮 Epsilon buffer — headroom so casting overhead doesn't push us over the limit.
@@ -66,8 +68,11 @@ pub struct Joiner {
     /// 🎼 Payload assembly — casts each feed + joins into wire format (NDJSON, JSON array)
     /// Also zero-sized. Also free to clone. Sensing a theme here.
     manifold: ManifoldBackend,
-    /// 📏 Max request size from sink config — flush when buffer + epsilon approaches this
-    max_request_size_bytes: usize,
+    /// 🔧 The throttle knob — Arc<AtomicUsize> read on every flush check.
+    /// When a PressureGauge is running, this value adjusts dynamically via PID.
+    /// When no regulator is active, it stays at the initial max_request_size_bytes forever.
+    /// Like a volume knob that someone else might be turning while you're listening. 🎚️
+    the_throttle_knob: FlowKnob,
 }
 
 impl Joiner {
@@ -80,14 +85,14 @@ impl Joiner {
         tx: Sender<String>,
         caster: DocumentCaster,
         manifold: ManifoldBackend,
-        max_request_size_bytes: usize,
+        the_throttle_knob: FlowKnob,
     ) -> Self {
         Self {
             rx,
             tx,
             caster,
             manifold,
-            max_request_size_bytes,
+            the_throttle_knob,
         }
     }
 
@@ -117,9 +122,12 @@ impl Joiner {
                         the_running_byte_tab += feed.len();
                         the_feed_buffer.push(feed);
 
-                        // 🧮 Flush when buffer + epsilon approaches max request size
+                        // 🧮 Flush when buffer + epsilon approaches the throttle knob value.
+                        // 🔧 Relaxed ordering — eventual consistency is fine for a throttle.
+                        // We'll see the updated value within a few iterations at most. No rush. 🎚️
+                        let the_current_max = self.the_throttle_knob.load(Ordering::Relaxed);
                         if the_running_byte_tab + BUFFER_EPSILON_BYTES
-                            >= self.max_request_size_bytes
+                            >= the_current_max
                         {
                             debug!(
                                 "🚿 Joiner flushing {} feeds ({} bytes) — buffer approaching max",
@@ -209,6 +217,15 @@ mod tests {
     use super::*;
     use crate::casts::passthrough;
     use crate::manifolds::json_array::JsonArrayManifold;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+
+    /// 🔧 Helper — create a FlowKnob from a usize value.
+    /// Because writing `Arc::new(AtomicUsize::new(x))` every test is the kind of
+    /// boilerplate that makes you question your career choices. 🏭
+    fn knob(value: usize) -> FlowKnob {
+        Arc::new(AtomicUsize::new(value))
+    }
 
     /// 🧪 The one where a single feed passes through the joiner thread and arrives at ch2.
     /// Like a message in a bottle, except the ocean is a bounded channel
@@ -224,7 +241,7 @@ mod tests {
             DocumentCaster::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
             // 📏 Huge max so we don't trigger mid-test flushes — we control the flush via channel close
-            usize::MAX,
+            knob(usize::MAX),
         );
 
         // 🚀 Launch the joiner thread into the void
@@ -258,7 +275,7 @@ mod tests {
             tx2,
             DocumentCaster::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
-            usize::MAX,
+            knob(usize::MAX),
         );
 
         let the_joiner_thread = joiner.start();
@@ -296,7 +313,7 @@ mod tests {
             tx2,
             DocumentCaster::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
-            comically_small_max,
+            knob(comically_small_max),
         );
 
         let the_joiner_thread = joiner.start();
@@ -328,7 +345,7 @@ mod tests {
             tx2,
             DocumentCaster::Passthrough(passthrough::Passthrough),
             ManifoldBackend::JsonArray(JsonArrayManifold),
-            usize::MAX,
+            knob(usize::MAX),
         );
 
         // 📤 Close ch1 immediately — nothing to process
@@ -342,5 +359,50 @@ mod tests {
             rx2.try_recv().is_err(),
             "🎯 No feeds in, no payloads out. Conservation of data. Physics approves."
         );
+    }
+
+    /// 🧪 The one where the FlowKnob changes mid-stream and the joiner adapts.
+    /// Proof that the Arc<AtomicUsize> actually does something useful, not just
+    /// sitting there looking atomic. Like a thermostat that someone turns down
+    /// while you're cooking — the kitchen gets colder. 🌡️🦆
+    #[test]
+    fn the_one_where_the_flow_knob_changes_mid_flight() {
+        let (tx1, rx1) = async_channel::bounded::<String>(10);
+        let (tx2, rx2) = async_channel::bounded::<String>(10);
+
+        // 📏 Start with a huge knob — nothing flushes until channel close
+        let the_shared_knob = knob(usize::MAX);
+        let the_knob_clone = the_shared_knob.clone();
+
+        let joiner = Joiner::new(
+            rx1,
+            tx2,
+            DocumentCaster::Passthrough(passthrough::Passthrough),
+            ManifoldBackend::JsonArray(JsonArrayManifold),
+            the_shared_knob,
+        );
+
+        let the_joiner_thread = joiner.start();
+
+        // 📤 Send first feed — won't flush yet (knob is huge)
+        tx1.send_blocking(r#"{"doc":"before"}"#.to_string()).unwrap();
+
+        // 🔧 Now crank the knob down so small that the NEXT feed triggers a flush
+        the_knob_clone.store(BUFFER_EPSILON_BYTES + 5, Ordering::Relaxed);
+
+        // 📤 Send second feed — should trigger flush due to lowered knob
+        tx1.send_blocking(r#"{"doc":"after"}"#.to_string()).unwrap();
+
+        // 📥 First payload should arrive (both feeds flushed together when threshold hit)
+        let the_first_payload = rx2.recv_blocking().unwrap();
+        assert!(
+            the_first_payload.contains("before"),
+            "🎯 First payload should contain the pre-knob-change feed — got {}",
+            the_first_payload
+        );
+
+        // 🏁 Close and drain remaining
+        tx1.close();
+        the_joiner_thread.join().unwrap().unwrap();
     }
 }

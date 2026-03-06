@@ -26,7 +26,10 @@ use crate::foreman::Foreman;
 use crate::app_config::{RuntimeConfig, SinkConfig, SourceConfig};
 use crate::manifolds::ManifoldBackend;
 use crate::casts::DocumentCaster;
+use crate::regulators::pressure_gauge::{FlowKnob, SinkAuth, spawn_pressure_gauge};
 use anyhow::{Context, Result};
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 use std::time::SystemTime;
 use tracing::info;
 
@@ -63,12 +66,57 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
     // The Manifold casts raw feeds AND joins them into wire format. Two birds, one Cow. 🐄
     let manifold = ManifoldBackend::from_sink_config(&app_config.sink_config);
 
-    // 📏 Extract max request size from sink config for Drainer buffering.
+    // 📏 Extract max request size from sink config — the hard ceiling for payload size.
     let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
+
+    // 🔧 Create the FlowKnob — shared atomic valve between pressure gauge and joiners.
+    // 🧠 When regulator is present, init to regulator's initial_output_bytes (PID starting point).
+    // When absent, init to sink's max_request_size_bytes (static, never changes). 🎚️
+    let the_initial_flow = match &app_config.regulator {
+        Some(reg) => reg.initial_output_bytes,
+        None => max_request_size_bytes,
+    };
+    let the_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(the_initial_flow));
+
+    // 🔬 Optionally spawn the pressure gauge — but only for cluster sinks (ES).
+    // File/InMemory sinks have no cluster to monitor. If someone puts [regulator] in a
+    // File→File config, we warn and skip rather than spam HTTP errors to localhost. 📡
+    let the_gauge_handle = match (&app_config.regulator, &app_config.sink_config) {
+        (Some(regulator_config), SinkConfig::Elasticsearch(_)) => {
+            let (the_sink_url, the_sink_auth) = extract_sink_url_and_auth(&app_config.sink_config);
+            info!(
+                "🔬 Regulator configured — spawning pressure gauge (target CPU: {}%, poll: {}s)",
+                regulator_config.target_cpu, regulator_config.poll_interval_secs
+            );
+            Some(spawn_pressure_gauge(
+                regulator_config.clone(),
+                the_sink_url,
+                the_sink_auth,
+                the_flow_knob.clone(),
+                max_request_size_bytes,
+            ))
+        }
+        (Some(_), _) => {
+            info!(
+                "⚠️ Regulator configured but sink is not a cluster backend — \
+                 pressure gauge not spawned. FlowKnob stays at initial value. \
+                 Like buying a thermostat for a tent. 🏕️"
+            );
+            None
+        }
+        (None, _) => None,
+    };
 
     let foreman = Foreman::new(app_config.clone());
     foreman
-        .start_workers(source_backend, sink_backends, caster, manifold, max_request_size_bytes)
+        .start_workers(
+            source_backend,
+            sink_backends,
+            caster,
+            manifold,
+            the_flow_knob,
+            the_gauge_handle,
+        )
         .await?;
 
     info!(
@@ -76,6 +124,33 @@ pub async fn run(app_config: AppConfig) -> Result<()> {
         start_time.elapsed()?
     );
     Ok(())
+}
+
+/// 🔧 Extract the sink URL and auth from sink config for the pressure gauge.
+///
+/// The gauge needs to hit `_nodes/stats/os` on the same cluster the drainers write to.
+/// We reuse the sink's connection details rather than asking for separate config. DRY, baby. 🏜️
+///
+/// 🧠 Returns ("http://localhost:9200", SinkAuth::None) for File/InMemory sinks since
+/// they have no cluster to monitor. The gauge won't be spawned for those anyway. 🦆
+fn extract_sink_url_and_auth(sink_config: &SinkConfig) -> (String, SinkAuth) {
+    match sink_config {
+        SinkConfig::Elasticsearch(es_cfg) => {
+            let the_auth = match (&es_cfg.username, &es_cfg.password) {
+                (Some(u), Some(p)) => SinkAuth::Basic {
+                    username: u.clone(),
+                    password: p.clone(),
+                },
+                _ => SinkAuth::None,
+            };
+            (es_cfg.url.clone(), the_auth)
+        }
+        SinkConfig::File(_) | SinkConfig::InMemory(_) => {
+            // ⚠️ No cluster to monitor — return dummy values.
+            // The caller shouldn't spawn a gauge for non-cluster sinks. 🤷
+            ("http://localhost:9200".to_string(), SinkAuth::None)
+        }
+    }
 }
 
 async fn from_source_config(config: &AppConfig) -> Result<SourceBackend> {
@@ -162,6 +237,7 @@ mod tests {
             },
             source_config: SourceConfig::InMemory(()),
             sink_config: SinkConfig::InMemory(()),
+            regulator: None,
         };
 
         let source = SourceBackend::InMemory(InMemorySource::new().await?);
@@ -180,9 +256,12 @@ mod tests {
         // 📏 Max request size from sink config
         let max_request_size_bytes = app_config.sink_config.max_request_size_bytes();
 
+        // 🔧 No regulator for tests — static flow knob at max 🎚️
+        let the_test_flow_knob: FlowKnob = Arc::new(AtomicUsize::new(max_request_size_bytes));
+
         let foreman = Foreman::new(app_config);
         foreman
-            .start_workers(source, vec![sink], caster, manifold, max_request_size_bytes)
+            .start_workers(source, vec![sink], caster, manifold, the_test_flow_knob, None)
             .await?;
 
         // 📦 Joiner received 1 feed (4 docs newline-delimited), passthrough-cast and joined into JSON array.

@@ -22,6 +22,7 @@ comfy-table = { workspace = true }
 wiremock = { workspace = true }
 criterion = { workspace = true }
 tempfile = { workspace = true }
+toml = { workspace = true }
 
 [[bench]]
 name = "file_source_bench"

@@ -7,6 +7,7 @@
 //! self-harm that even the borrow checker wouldn't approve of.
 
 use anyhow::Context;
+use crate::regulators::RegulatorConfig;
 use serde::Deserialize;
 // -- 🔧 To load the configuration, so I don't have to manually parse
 // -- environment variables or files. Bleh. Like doing taxes but for bytes.
@@ -169,6 +170,10 @@ pub struct AppConfig {
     pub sink_config: SinkConfig,
     #[serde(default)]
     pub runtime: RuntimeConfig,
+    /// 🔬 Optional regulator config — if present, spawns a PID-controlled pressure gauge
+    /// that dynamically adjusts payload size based on sink cluster CPU pressure.
+    /// If absent, pipeline runs at fixed max_request_size_bytes. Business as usual. 🎚️
+    pub regulator: Option<RegulatorConfig>,
 }
 
 /// 🚀 Load the config — from a file, from env vars, or from the sheer power of hoping.
@@ -227,21 +232,25 @@ pub fn load_config(config_file_name: Option<&Path>) -> anyhow::Result<AppConfig>
 mod tests {
     use super::*;
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn write_test_config(contents: &str) -> std::path::PathBuf {
-        let timestamp_of_questionable_life_choices = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("💀 Clock went backwards. Time is a flat bug report.")
-            .as_nanos();
-        let temp_path = std::env::temp_dir().join(format!(
-            "kvx_app_config_{timestamp_of_questionable_life_choices}.toml"
-        ));
+    /// 🧪 Write test TOML to a guaranteed-unique temp file via the `tempfile` crate.
+    /// 🧠 Previously used nanosecond timestamps which collided when tests ran in parallel —
+    /// two tests at the same nanosecond would write to the same file, and one would read
+    /// the other's TOML content. Like two people writing different grocery lists on the
+    /// same fridge whiteboard at the same time. Now each test gets its own file. 🧊🦆
+    fn write_test_config(contents: &str) -> tempfile::TempPath {
+        let the_temp_file = tempfile::Builder::new()
+            .prefix("kvx_app_config_")
+            .suffix(".toml")
+            .tempfile()
+            .expect("💀 Failed to create temp file. The OS said 'I'm full, try again never'.");
 
-        // -- 🧪 We write a real file here because Figment wants TOML from disk, like it's method acting.
-        fs::write(&temp_path, contents)
+        fs::write(the_temp_file.path(), contents)
             .expect("💀 Failed to write test config. The filesystem said 'new phone who dis'.");
-        temp_path
+
+        // 📂 Return TempPath — file auto-deletes when TempPath drops. No manual cleanup needed.
+        // Like a self-cleaning oven, but for config files. 🧹
+        the_temp_file.into_temp_path()
     }
 
     #[test]
@@ -261,7 +270,7 @@ mod tests {
             "#,
         );
 
-        let app_config = load_config(Some(config_path.as_path())).expect(
+        let app_config = load_config(Some(&config_path)).expect(
             "💀 Runtime config should parse. The schema drift goblin does not get this win.",
         );
 
@@ -277,8 +286,7 @@ mod tests {
             ),
         }
 
-        fs::remove_file(config_path)
-            .expect("💀 Failed to remove test config. Even the trash has trust issues.");
+        // 🧹 TempPath auto-deletes on drop — no manual cleanup needed
     }
 
     #[test]
@@ -294,15 +302,14 @@ mod tests {
         );
 
         let app_config: AppConfig = Figment::new()
-            .merge(Toml::file(config_path.as_path()))
+            .merge(Toml::file(&config_path))
             .extract()
             .expect("💀 Default runtime config should exist. Serde left us on read otherwise.");
 
         assert_eq!(app_config.runtime.pumper_to_joiner_capacity, RuntimeConfig::default().pumper_to_joiner_capacity);
         assert_eq!(app_config.runtime.sink_parallelism, RuntimeConfig::default().sink_parallelism);
 
-        fs::remove_file(config_path)
-            .expect("💀 Failed to remove test config. The janitor quit mid-scene.");
+        // 🧹 TempPath auto-deletes on drop — no manual cleanup needed
     }
 
     #[test]
@@ -321,13 +328,12 @@ mod tests {
             "#,
         );
 
-        let app_config = load_config(Some(config_path.as_path()))
+        let app_config = load_config(Some(&config_path))
             .expect("💀 Runtime aliases should parse. The witness protection paperwork was valid.");
 
         assert_eq!(app_config.runtime.pumper_to_joiner_capacity, 12);
         assert_eq!(app_config.runtime.sink_parallelism, 4);
 
-        fs::remove_file(config_path)
-            .expect("💀 Failed to remove test config. The janitor quit mid-scene.");
+        // 🧹 TempPath auto-deletes on drop — no manual cleanup needed
     }
 }

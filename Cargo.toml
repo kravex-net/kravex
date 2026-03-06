@@ -28,8 +28,8 @@ reqwest = "0.13"
 # 📦 derive deez nuts (sorry, the conventions made me do it)
 serde = { version = "1.0", features = ["derive"] }
 
-# 🦆 serde's plus one at the party
-serde_json = "1.0"
+# 🦆 serde's plus one at the party — raw_value lets us borrow _source without parsing it
+serde_json = { version = "1.0", features = ["raw_value"] }
 
 # 🧵👑 the async overlord. kneel before thy runtime, peasant threads.
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "io-util"]}
@@ -60,3 +60,6 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 
 # 📁 temp files that clean up after themselves — unlike my desk
 tempfile = "3"
+
+# 🍞 TOML parsing — because figment handles merging but sometimes you just want to parse a string
+toml = "0.8"

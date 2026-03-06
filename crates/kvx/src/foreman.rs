@@ -25,6 +25,7 @@
 use crate::app_config::AppConfig;
 use crate::casts::DocumentCaster;
 use crate::manifolds::ManifoldBackend;
+use crate::regulators::pressure_gauge::FlowKnob;
 use crate::workers;
 use crate::workers::Worker;
 use anyhow::{Context, Result};
@@ -79,7 +80,8 @@ impl Foreman {
         sink_backends: Vec<crate::backends::SinkBackend>,
         caster: DocumentCaster,
         manifold: ManifoldBackend,
-        max_request_size_bytes: usize,
+        the_flow_knob: FlowKnob,
+        the_gauge_handle: Option<tokio::task::JoinHandle<()>>,
     ) -> Result<()> {
         let the_joiner_count = self.app_config.runtime.joiner_parallelism;
 
@@ -129,7 +131,7 @@ impl Foreman {
                 tx2.clone(),
                 caster.clone(),
                 manifold.clone(),
-                max_request_size_bytes,
+                the_flow_knob.clone(),
             );
             the_joiner_thread_handles.push(joiner.start());
         }
@@ -193,6 +195,13 @@ impl Foreman {
                      but the feeds fought back like a cornered raccoon 🦝",
                     i
                 ))?;
+        }
+
+        // 🔬 Abort the pressure gauge if it was running — pipeline is done, no more regulating needed.
+        // Like turning off the thermostat when you're moving out. 🌡️🦆
+        if let Some(the_gauge) = the_gauge_handle {
+            the_gauge.abort();
+            info!("🔬 Pressure gauge aborted — pipeline complete, regulation no longer needed");
         }
 
         Ok(())
