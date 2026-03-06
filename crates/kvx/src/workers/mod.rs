@@ -17,6 +17,9 @@
 use anyhow::Result;
 use tokio::task::JoinHandle;
 
+mod config;
+pub use config::DrainerConfig;
+pub use config::FlowMasterConfig;
 mod drainer;
 pub use drainer::Drainer;
 mod pumper;

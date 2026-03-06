@@ -150,7 +150,7 @@ impl Foreman {
         // Each drainer gets its own sink and a clone of rx2.
         let mut the_async_worker_handles = Vec::with_capacity(sink_backends.len() + 1);
         for sink_backend in sink_backends {
-            let drainer = workers::Drainer::new(rx2.clone(), sink_backend);
+            let drainer = workers::Drainer::new(rx2.clone(), sink_backend, self.app_config.drainer.clone());
             the_async_worker_handles.push(drainer.start());
         }
 

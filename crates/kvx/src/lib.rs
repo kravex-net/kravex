@@ -233,7 +233,7 @@ impl From<String> for Page {
 }
 
 // 📦 A fully assembled, wire-ready payload — the final form before I/O.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Payload(pub String);
 
 impl Deref for Payload {
@@ -304,6 +304,7 @@ mod tests {
             source_config: SourceConfig::InMemory(()),
             sink_config: SinkConfig::InMemory(()),
             regulator: None,
+            drainer: Default::default(),
         };
 
         let source = SourceBackend::InMemory(InMemorySource::new().await?);

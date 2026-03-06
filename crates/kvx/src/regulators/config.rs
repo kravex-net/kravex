@@ -27,7 +27,7 @@ use serde::Deserialize;
 /// 🧠 If this section is absent from config, no regulator is created and the pipeline
 /// runs at fixed max_request_size_bytes from the sink config. Business as usual. 🦆
 #[derive(Debug, Deserialize, Clone)]
-pub struct RegulatorConfig {
+pub struct CpuRegulatorConfig {
     /// 🎯 Target CPU percent for the sink cluster (default: 75.0)
     #[serde(default = "default_target_cpu")]
     pub target_cpu: f64,
@@ -51,3 +51,13 @@ fn default_target_cpu() -> f64 { 75.0 }
 fn default_poll_interval_secs() -> u64 { 3 }
 fn default_min_request_size_bytes() -> usize { 128 * 1024 } // 📏 128 KiB
 fn default_initial_output_bytes() -> usize { 4 * 1024 * 1024 } // 📊 4 MiB
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct StaticRegulatorConfig {
+    pub output_bytes: usize
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LatencyRegulatorConfig {
+    pub set_point_latency_ms: usize
+}

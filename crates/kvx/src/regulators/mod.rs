@@ -26,7 +26,9 @@ pub mod cpu_pressure;
 pub mod pressure_gauge;
 pub mod static_regulator;
 
-pub use config::RegulatorConfig;
+pub use config::CpuRegulatorConfig;
+pub use config::StaticRegulatorConfig;
+pub use config::LatencyRegulatorConfig;
 pub use cpu_pressure::CpuPressure;
 pub use pressure_gauge::{FlowKnob, SinkAuth, spawn_pressure_gauge};
 pub use static_regulator::ByteValue;
@@ -72,7 +74,7 @@ impl Regulators {
     /// 📏 `sink_max_request_size_bytes` is the hard ceiling from the sink config.
     /// The PID uses this as its max output — no disagreement between regulator and sink.
     /// Single source of truth for the ceiling. The floor comes from RegulatorConfig. 🎚️
-    pub fn from_config(config: &RegulatorConfig, sink_max_request_size_bytes: usize) -> Self {
+    pub fn from_config(config: &CpuRegulatorConfig, sink_max_request_size_bytes: usize) -> Self {
         Regulators::CpuPressure(CpuPressure::new(
             config.target_cpu,
             config.min_request_size_bytes as f64,
@@ -113,7 +115,7 @@ mod tests {
     /// Because if you wrote a [regulator] section, you meant business. 🦆
     #[test]
     fn the_one_where_from_config_creates_pid() {
-        let the_config = RegulatorConfig {
+        let the_config = CpuRegulatorConfig {
             target_cpu: 80.0,
             poll_interval_secs: 5,
             min_request_size_bytes: 65_536,
@@ -137,7 +139,7 @@ mod tests {
             initial_output_bytes = 2097152
         "#;
 
-        let the_config: RegulatorConfig = toml::from_str(the_toml)
+        let the_config: CpuRegulatorConfig = toml::from_str(the_toml)
             .expect("💀 RegulatorConfig should deserialize from TOML — serde had one job");
 
         assert!((the_config.target_cpu - 72.5).abs() < f64::EPSILON, "🎯 target_cpu should be 72.5");
@@ -151,7 +153,7 @@ mod tests {
     #[test]
     fn the_one_where_defaults_are_not_insane() {
         let the_toml = "";
-        let the_config: RegulatorConfig = toml::from_str(the_toml)
+        let the_config: CpuRegulatorConfig = toml::from_str(the_toml)
             .expect("💀 Empty TOML should use defaults — that's literally the point");
 
         assert!((the_config.target_cpu - 75.0).abs() < f64::EPSILON, "🎯 Default target CPU is 75%");

@@ -18,7 +18,7 @@
 //!
 //! ⚠️ The singularity will regulate itself. We're just building the training data.
 
-use crate::regulators::{Regulate, RegulatorConfig, Regulators};
+use crate::regulators::{Regulate, CpuRegulatorConfig, Regulators};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -148,7 +148,7 @@ pub async fn read_node_pressure(
 /// "In a world where JVM GC pauses threaten everything we hold dear...
 ///  one background task dared to poll every 3 seconds." 🎬🦆
 pub fn spawn_pressure_gauge(
-    config: RegulatorConfig,
+    config: CpuRegulatorConfig,
     base_url: String,
     auth: SinkAuth,
     flow_knob: FlowKnob,
