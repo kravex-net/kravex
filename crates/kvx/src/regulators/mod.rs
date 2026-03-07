@@ -26,12 +26,16 @@ pub mod cpu_pressure;
 pub mod pressure_gauge;
 pub mod static_regulator;
 
+use std::time::Duration;
+
 pub use config::CpuRegulatorConfig;
 pub use config::StaticRegulatorConfig;
 pub use config::LatencyRegulatorConfig;
 pub use cpu_pressure::CpuPressure;
 pub use pressure_gauge::{FlowKnob, SinkAuth, spawn_pressure_gauge};
 pub use static_regulator::ByteValue;
+
+use crate::GaugeReading;
 
 // ============================================================
 // 🎛️ Regulate trait — the contract for all regulators
@@ -46,7 +50,7 @@ pub trait Regulate {
     /// - `reading`: the measured value (CPU %, latency ms, whatever)
     /// - `since_last_checked_ms`: time since last call in milliseconds
     /// - Returns: new output value (bytes, typically)
-    fn regulate(&mut self, reading: f64, since_last_checked_ms: f64) -> f64;
+    fn regulate(&mut self, reading: GaugeReading, since_last_checked_ms: Duration) -> f64;
 }
 
 // ============================================================
@@ -85,7 +89,7 @@ impl Regulators {
 }
 
 impl Regulate for Regulators {
-    fn regulate(&mut self, reading: f64, since_last_checked_ms: f64) -> f64 {
+    fn regulate(&mut self, reading: GaugeReading, since_last_checked_ms: Duration) -> f64 {
         match self {
             Regulators::Static(the_byte_value) => the_byte_value.regulate(reading, since_last_checked_ms),
             Regulators::CpuPressure(the_pid) => the_pid.regulate(reading, since_last_checked_ms),

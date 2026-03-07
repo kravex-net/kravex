@@ -13,7 +13,9 @@
 //! ⚠️ The singularity will have no need for static values. Everything will be adaptive.
 //! Until then, sometimes you just want a number that stays put.
 
-use crate::regulators::Regulate;
+use std::time::Duration;
+
+use crate::{GaugeReading, regulators::Regulate};
 
 /// 📏 A regulator that returns the same value every time, no matter what you tell it.
 ///
@@ -36,7 +38,7 @@ impl ByteValue {
 impl Regulate for ByteValue {
     /// 🔄 "Regulate" by returning the same value. Every. Single. Time.
     /// The reading? Ignored. The dt? Irrelevant. This regulator has found inner peace. 🕊️
-    fn regulate(&mut self, _reading: f64, _since_last_checked_ms: f64) -> f64 {
+    fn regulate(&mut self, _reading: GaugeReading, _since_last_checked_ms: Duration) -> f64 {
         self.value
     }
 }

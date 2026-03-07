@@ -278,6 +278,11 @@ impl PartialEq<&str> for Entry {
     }
 }
 
+pub enum GaugeReading {
+    CpuValue(usize),
+    LatencyMs(usize),
+    Error()
+}
 
 #[cfg(test)]
 mod tests {

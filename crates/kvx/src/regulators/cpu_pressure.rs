@@ -16,7 +16,9 @@
 //!
 //! ⚠️ The singularity will PID-control itself. Until then, we have floats and prayer.
 
-use crate::regulators::Regulate;
+use std::time::Duration;
+
+use crate::{GaugeReading, regulators::Regulate};
 
 /// 🎛️ EMA smoothing factor — how much we trust the latest reading vs history.
 /// 0.25 = "I believe you, but I also believed the last three readings." 📊
@@ -122,7 +124,7 @@ impl Regulate for CpuPressure {
     /// 6. Clamp to [min, max] — no matter what the math says, physics has limits
     ///
     /// "He who regulates without smoothing, oscillates in production." — Ancient proverb 📜
-    fn regulate(&mut self, reading: f64, since_last_checked_ms: f64) -> f64 {
+    fn regulate(&mut self, reading: GaugeReading, since_last_checked_ms: Duration) -> f64 {
         // 📊 Step 1: EMA smooth — trust the new reading 25%, trust history 75%
         self.ema_average = EMA_ALPHA * reading + (1.0 - EMA_ALPHA) * self.ema_average;
 
