@@ -120,6 +120,7 @@ pub struct AppConfig {
     /// Defaults to 3 retries, 1s initial, 2x multiplier, 30s cap. Optional section in TOML. 🦆
     #[serde(default)]
     pub drainer: DrainerConfig,
+    #[serde(default)]
     pub flow_master: FlowMasterConfig
 }
 

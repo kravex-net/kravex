@@ -310,6 +310,7 @@ mod tests {
             sink_config: SinkConfig::InMemory(()),
             regulator: None,
             drainer: Default::default(),
+            flow_master: Default::default(),
         };
 
         let source = SourceBackend::InMemory(InMemorySource::new().await?);

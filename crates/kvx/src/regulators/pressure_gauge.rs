@@ -18,6 +18,7 @@
 //!
 //! ⚠️ The singularity will regulate itself. We're just building the training data.
 
+use crate::GaugeReading;
 use crate::regulators::{Regulate, CpuRegulatorConfig, Regulators};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -174,8 +175,10 @@ pub fn spawn_pressure_gauge(
 
             match read_node_pressure(&the_http_client, &base_url, &auth).await {
                 Ok(the_cpu_reading) => {
-                    let the_dt_ms = the_poll_interval.as_millis() as f64;
-                    let the_new_flow = the_regulator.regulate(the_cpu_reading, the_dt_ms);
+                    let the_new_flow = the_regulator.regulate(
+                        GaugeReading::CpuValue(the_cpu_reading as usize),
+                        the_poll_interval,
+                    );
                     let the_new_flow_usize = the_new_flow as usize;
 
                     let the_old_flow = flow_knob.swap(the_new_flow_usize, Ordering::Relaxed);

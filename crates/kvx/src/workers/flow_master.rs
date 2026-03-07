@@ -33,7 +33,7 @@ impl FlowMaster {
 }
 
 impl Worker for FlowMaster {
-    pub fn start(mut self) -> JoinHandle<Result<()>> {
+    fn start(mut self) -> JoinHandle<Result<()>> {
         tokio::spawn(async move {
             let mut the_last_time_we_checked = SystemTime::now();
             loop {

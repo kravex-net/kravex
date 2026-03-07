@@ -107,11 +107,11 @@ mod tests {
     fn the_one_where_enum_dispatch_actually_dispatches() {
         // 📏 Static variant — should return fixed value
         let mut the_static = Regulators::Static(ByteValue::new(42.0));
-        assert_eq!(the_static.regulate(999.0, 1000.0), 42.0, "🎯 Static should return 42 regardless");
+        assert_eq!(the_static.regulate(GaugeReading::CpuValue(999), Duration::from_millis(1000)), 42.0, "🎯 Static should return 42 regardless");
 
         // 🎛️ CpuPressure variant — should return something different from initial after regulation
         let mut the_pid = Regulators::CpuPressure(CpuPressure::new(75.0, 100.0, 1_000_000.0, 500_000.0));
-        let the_first_output = the_pid.regulate(50.0, 3000.0);
+        let the_first_output = the_pid.regulate(GaugeReading::CpuValue(50), Duration::from_millis(3000));
         assert!(the_first_output > 0.0, "🎯 PID should return a positive value — got {}", the_first_output);
     }
 
@@ -128,7 +128,7 @@ mod tests {
 
         // 📏 Sink max passed in separately — single source of truth for the ceiling 🎚️
         let mut the_regulator = Regulators::from_config(&the_config, 33_554_432);
-        let the_output = the_regulator.regulate(60.0, 5000.0);
+        let the_output = the_regulator.regulate(GaugeReading::CpuValue(60), Duration::from_millis(5000));
         assert!(the_output > 0.0, "🎯 from_config regulator should produce positive output");
     }
 

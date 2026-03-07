@@ -54,9 +54,9 @@ mod tests {
         let mut the_unbothered_regulator = ByteValue::new(4_194_304.0);
 
         // 📊 Try various readings — output should always be 4 MiB
-        assert_eq!(the_unbothered_regulator.regulate(0.0, 1000.0), 4_194_304.0);
-        assert_eq!(the_unbothered_regulator.regulate(100.0, 1000.0), 4_194_304.0);
-        assert_eq!(the_unbothered_regulator.regulate(75.0, 5000.0), 4_194_304.0);
-        assert_eq!(the_unbothered_regulator.regulate(999.0, 0.0), 4_194_304.0);
+        assert_eq!(the_unbothered_regulator.regulate(GaugeReading::CpuValue(0), Duration::from_millis(1000)), 4_194_304.0);
+        assert_eq!(the_unbothered_regulator.regulate(GaugeReading::CpuValue(100), Duration::from_millis(1000)), 4_194_304.0);
+        assert_eq!(the_unbothered_regulator.regulate(GaugeReading::CpuValue(75), Duration::from_millis(5000)), 4_194_304.0);
+        assert_eq!(the_unbothered_regulator.regulate(GaugeReading::CpuValue(999), Duration::from_millis(0)), 4_194_304.0);
     }
 }

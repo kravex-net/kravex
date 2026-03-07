@@ -125,8 +125,14 @@ impl Regulate for CpuPressure {
     ///
     /// "He who regulates without smoothing, oscillates in production." — Ancient proverb 📜
     fn regulate(&mut self, reading: GaugeReading, since_last_checked_ms: Duration) -> f64 {
+        // 🎰 Extract the number from the enum — or bail if it's an Error (hold steady, like a poker face)
+        let reading_value = match reading {
+            GaugeReading::CpuValue(v) | GaugeReading::LatencyMs(v) => v as f64,
+            GaugeReading::Error() => return self.output,
+        };
+
         // 📊 Step 1: EMA smooth — trust the new reading 25%, trust history 75%
-        self.ema_average = EMA_ALPHA * reading + (1.0 - EMA_ALPHA) * self.ema_average;
+        self.ema_average = EMA_ALPHA * reading_value + (1.0 - EMA_ALPHA) * self.ema_average;
 
         // 🎯 Step 2: Error = how far from the promised land
         // Positive error = CPU below setpoint = we can send MORE bytes 🚀
@@ -134,7 +140,7 @@ impl Regulate for CpuPressure {
         let error = self.setpoint - self.ema_average;
 
         // 📈 Step 3: Integral accumulation with anti-windup
-        let dt_seconds = since_last_checked_ms / 1000.0;
+        let dt_seconds = since_last_checked_ms.as_millis() as f64 / 1000.0;
         self.integral_accumulation += error * dt_seconds;
         self.integral_accumulation = self
             .integral_accumulation
@@ -163,6 +169,7 @@ impl Regulate for CpuPressure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     /// 🧪 The one where the PID controller is born with reasonable defaults.
     /// Like a newborn, it doesn't know what it's doing yet, but the gains look promising. 👶
@@ -187,7 +194,7 @@ mod tests {
         let the_starting_output = the_controller.output;
 
         // 📊 Feed it 50% CPU — well below 75% setpoint — should increase output
-        let the_new_flow = the_controller.regulate(50.0, 3000.0);
+        let the_new_flow = the_controller.regulate(GaugeReading::CpuValue(50), Duration::from_millis(3000));
 
         assert!(
             the_new_flow > the_starting_output,
@@ -204,7 +211,7 @@ mod tests {
 
         // 📊 First, pump output up by feeding low CPU readings — give it room to decrease
         for _ in 0..10 {
-            the_controller.regulate(50.0, 3000.0);
+            the_controller.regulate(GaugeReading::CpuValue(50), Duration::from_millis(3000));
         }
         let the_elevated_output = the_controller.output;
 
@@ -212,7 +219,7 @@ mod tests {
         // ⚠️ EMA needs several readings to overcome the low-CPU momentum,
         // so we pump 20 readings at 95% to let the PID fully respond. 🔥
         for _ in 0..20 {
-            the_controller.regulate(95.0, 3000.0);
+            the_controller.regulate(GaugeReading::CpuValue(95), Duration::from_millis(3000));
         }
 
         assert!(
@@ -232,7 +239,7 @@ mod tests {
 
         // 🚀 Feed it super low CPU — should try to max out but respect ceiling
         for _ in 0..100 {
-            the_controller.regulate(10.0, 3000.0);
+            the_controller.regulate(GaugeReading::CpuValue(10), Duration::from_millis(3000));
         }
         assert!(
             the_controller.output <= the_max,
@@ -242,7 +249,7 @@ mod tests {
 
         // 💀 Feed it super high CPU — should try to min out but respect floor
         for _ in 0..100 {
-            the_controller.regulate(99.0, 3000.0);
+            the_controller.regulate(GaugeReading::CpuValue(99), Duration::from_millis(3000));
         }
         assert!(
             the_controller.output >= the_min,
@@ -258,10 +265,10 @@ mod tests {
         let mut the_controller = CpuPressure::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
 
         // 📊 Alternate between extremes — EMA should dampen the oscillation
-        the_controller.regulate(100.0, 3000.0);
+        the_controller.regulate(GaugeReading::CpuValue(100), Duration::from_millis(3000));
         let after_high = the_controller.ema_average;
 
-        the_controller.regulate(0.0, 3000.0);
+        the_controller.regulate(GaugeReading::CpuValue(0), Duration::from_millis(3000));
         let after_low = the_controller.ema_average;
 
         // 📊 EMA should NOT be at 0 — it should still remember the 100 reading
@@ -285,7 +292,7 @@ mod tests {
         let mut the_controller = CpuPressure::new(75.0, 131_072.0, 67_108_864.0, 4_194_304.0);
 
         // 📊 Zero dt — derivative should be 0, no NaN, no panic
-        let the_result = the_controller.regulate(80.0, 0.0);
+        let the_result = the_controller.regulate(GaugeReading::CpuValue(80), Duration::from_millis(0));
         assert!(
             the_result.is_finite(),
             "🎯 Output should be finite even with zero dt — got {}",
@@ -302,14 +309,14 @@ mod tests {
 
         // 📊 Feed exactly the setpoint for many iterations — should converge
         for _ in 0..100 {
-            the_controller.regulate(75.0, 3000.0);
+            the_controller.regulate(GaugeReading::CpuValue(75), Duration::from_millis(3000));
         }
 
         let the_settled_output = the_controller.output;
 
         // 📊 Run 20 more — output should barely change (steady state)
         for _ in 0..20 {
-            the_controller.regulate(75.0, 3000.0);
+            the_controller.regulate(GaugeReading::CpuValue(75), Duration::from_millis(3000));
         }
 
         let the_drift = (the_controller.output - the_settled_output).abs();

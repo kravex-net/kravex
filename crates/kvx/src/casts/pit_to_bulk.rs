@@ -107,7 +107,7 @@ impl Caster for PitToBulk {
             .iter()
             .map(|hit| hit._source.get().len() + 80)
             .sum();
-        let mut the_bulk_body = String::with_capacity(the_estimated_size);
+        let the_bulk_body = String::with_capacity(the_estimated_size);
         let mut the_final_result = Vec::with_capacity(the_estimated_size);
 
         // 🏗️ Phase 3: Build bulk NDJSON — action line + source doc per hit

@@ -82,6 +82,13 @@ pub enum FlowMasterConfig {
     Latency(LatencyRegulatorConfig)
 }
 
+impl Default for FlowMasterConfig {
+    // 📏 Default: static 4 MiB — the same safe starting point the PID controller uses
+    fn default() -> Self {
+        FlowMasterConfig::Static(StaticRegulatorConfig { output_bytes: 4 * 1024 * 1024 })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
